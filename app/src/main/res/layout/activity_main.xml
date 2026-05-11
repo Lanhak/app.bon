@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tvInfo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Đã kích hoạt"
+        android:textSize="14sp" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="12dp" />
+
+    <Button
+        android:id="@+id/btnGolike"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Golike" />
+
+    <Button
+        android:id="@+id/btnTds"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="TDS"
+        android:layout_marginTop="8dp" />
+
+    <Button
+        android:id="@+id/btnTtc"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="TTC"
+        android:layout_marginTop="8dp" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="16dp" />
+
+    <Button
+        android:id="@+id/btnSettings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Cài URL đăng nhập" />
+
+    <Button
+        android:id="@+id/btnSigner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Signer (ký APK)"
+        android:layout_marginTop="8dp" />
+
+    <Button
+        android:id="@+id/btnLogoutKey"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Xoá key / Đăng xuất"
+        android:layout_marginTop="8dp" />
+
+</LinearLayout>
+
