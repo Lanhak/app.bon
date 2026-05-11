@@ -10,9 +10,9 @@ Mở file:
 
 Sửa:
 ```kotlin
-const val BASE_URL = "https://us-central1-YOUR_PROJECT.cloudfunctions.net"
+const val BASE_URL = "https://key-server-zfwa.onrender.com"
 ```
-thành base URL thật sau khi bạn deploy backend.
+thành base URL backend của bạn (Node.js/Render).
 
 ## 2) Chạy app
 1. Mở project bằng Android Studio
@@ -28,9 +28,13 @@ Nếu bạn không muốn cài Android Studio, bạn có thể build trên GitHu
 
 ## 3) Luồng sử dụng
 - Mở app → nếu chưa có key → màn hình Key
-- Bấm **“Lấy key trial 24h”** → app gọi API `requestTrial` và copy key
-- Bấm **“Xác thực & vào app”** → gọi API `validateKey`
-- Hợp lệ → vào Signer
+- Bấm **“Lấy key trial 24h”** → app gọi API `POST /requestTrial` và copy key
+- Bấm **“Xác thực & vào app”** → gọi API `POST /validateKey`
+- Hợp lệ → vào màn hình chính (Golike/TDS/TTC + Signer)
+
+## 4) Đăng nhập Golike/TDS/TTC (thủ công)
+- Vào màn hình chính → bấm **Cài URL đăng nhập** để dán URL login của Golike/TDS/TTC
+- Sau đó bấm Golike/TDS/TTC → app mở WebView để bạn tự đăng nhập
 
 ## Lưu ý
 - Đây là cơ chế licensing mẫu hợp lệ (server cấp/validate key).  
