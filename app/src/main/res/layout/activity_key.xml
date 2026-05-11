@@ -59,7 +59,7 @@
         android:id="@+id/btnValidate"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Xác thực & vào app"
+        android:text="Xác thực và vào app"
         app:layout_constraintTop_toBottomOf="@id/btnGetTrial"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
