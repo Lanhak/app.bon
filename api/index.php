@@ -1,0 +1,1 @@
+<?php header('Content-Type: application/json; charset=utf-8');echo json_encode(['name'=>'BON SHOP API','version'=>'1.0','endpoint'=>'POST /api/check-key.php'],JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
