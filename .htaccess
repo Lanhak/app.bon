@@ -1,0 +1,8 @@
+Options -Indexes
+
+RewriteEngine On
+RewriteRule ^admin/?$ admin.php [L,QSA]
+
+<FilesMatch "^(config\.php|db\.sql|README\.md)$">
+    Require all denied
+</FilesMatch>
