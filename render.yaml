@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: bonshop
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /checkkey/api/announcement.json
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: PORT
+        value: 3000
+      - key: BASE_URL
+        value: https://bonshop.onrender.com
+      # BẮT BUỘC đổi SESSION_SECRET và API_SECRET khi deploy thật
+      - key: SESSION_SECRET
+        sync: false
+      - key: API_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        value: akklanh84@gmail.com
+      - key: ADMIN_PASSWORD
+        value: ttht2007
+      - key: KEYADMIN
+        value: huongdev8386
