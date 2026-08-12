@@ -1,16 +1,17 @@
-<!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>BON SERVER Admin</title>
-<style>body{font:15px Arial;background:#080d18;color:#eee;padding:20px}.wrap{max-width:760px;margin:auto}.card{background:#101a2b;border:1px solid #29405f;border-radius:16px;padding:18px;margin-bottom:14px}input,button,textarea{padding:10px;border-radius:9px;border:1px solid #344d70;background:#0b1321;color:#fff;margin:4px 0}button{cursor:pointer;background:#245ee8;border:0}.row{display:flex;gap:8px;flex-wrap:wrap}pre{white-space:pre-wrap;max-height:400px;overflow:auto}</style></head>
-<body><div class="wrap"><div class="card"><h2>BON SERVER — ADMIN</h2><p>Quản lý bằng API JSON. Nhập ADMIN_KEY.</p><input id="key" type="password" placeholder="ADMIN_KEY" style="width:100%"></div>
-<div class="card"><h3>Tạo VIP Key</h3><div class="row"><input id="hours" type="number" placeholder="Số giờ" value="24"><input id="price" type="number" placeholder="Giá"><input id="limit" type="number" placeholder="Thiết bị" value="1"><button onclick="createKey()">Tạo key</button></div><pre id="out"></pre></div>
-<div class="card"><h3>Danh sách key</h3><button onclick="loadKeys()">Tải danh sách</button><pre id="keys"></pre></div>
-<div class="card"><h3>Thêm Facebook Job</h3><input id="fblink" placeholder="link" style="width:100%"><input id="fbobj" placeholder="object_id"><input id="fbprice" placeholder="price" value="35"><button onclick="addFb()">Thêm</button></div>
-<div class="card"><h3>Thêm TikTok Job</h3><input id="tturl" placeholder="video_url" style="width:100%"><input id="ttads" placeholder="ads_id"><input id="ttacc" placeholder="account_id"><input id="ttprice" placeholder="price" value="20"><button onclick="addTt()">Thêm</button></div></div>
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BON Admin</title>
+<style>body{font-family:Arial;background:#070b16;color:#fff;padding:20px}.wrap{max-width:850px;margin:auto}.card{background:#0d1729;border:1px solid #263a5b;border-radius:16px;padding:20px;margin:12px 0}input,button{width:100%;padding:12px;margin:5px 0;border-radius:9px;border:1px solid #344d70;background:#091220;color:#fff}button{background:#285ee7;border:0;font-weight:700}pre{white-space:pre-wrap;background:#080e19;padding:12px;border-radius:10px;max-height:400px;overflow:auto}#panel{display:none}.top{display:flex;justify-content:space-between;align-items:center}.top button{width:auto}</style></head>
+<body><div class="wrap">
+<div id="login" class="card"><h2>🔐 BON ADMIN</h2><input id="email" type="email" placeholder="Admin Email"><input id="password" type="password" placeholder="Admin Password"><button onclick="login()">ĐĂNG NHẬP</button><pre id="msg"></pre></div>
+<div id="panel"><div class="card top"><b>BON SERVER — ADMIN</b><button onclick="logout()">ĐĂNG XUẤT</button></div>
+<div class="card"><h3>🔑 Tạo VIP Key</h3><input id="hours" type="number" value="24" placeholder="Số giờ"><input id="price" type="number" value="2000" placeholder="Giá"><input id="limit" type="number" value="1" placeholder="Thiết bị"><button onclick="createKey()">TẠO KEY</button><pre id="out"></pre></div>
+<div class="card"><h3>📋 VIP Keys</h3><button onclick="loadKeys()">TẢI DANH SÁCH</button><pre id="keys"></pre></div></div></div>
 <script>
-const H=()=>({'Content-Type':'application/json','X-Admin-Key':document.getElementById('key').value});
-async function j(url,opt={}){const r=await fetch(url,{...opt,headers:{...H(),...(opt.headers||{})}});return r.json()}
-async function createKey(){out.textContent=JSON.stringify(await j('/admin/api/keys',{method:'POST',body:JSON.stringify({duration_hours:+hours.value,price:+price.value,device_limit:+limit.value})}),null,2)}
-async function loadKeys(){keys.textContent=JSON.stringify(await j('/admin/api/keys'),null,2)}
-async function addFb(){out.textContent=JSON.stringify(await j('/admin/api/jobs/facebook',{method:'POST',body:JSON.stringify({link:fblink.value,object_id:fbobj.value,type:'like',reaction:'like',price:+fbprice.value})}),null,2)}
-async function addTt(){out.textContent=JSON.stringify(await j('/admin/api/jobs/tiktok',{method:'POST',body:JSON.stringify({video_url:tturl.value,ads_id:ttads.value,account_id:ttacc.value,price:+ttprice.value})}),null,2)}
+let token=localStorage.getItem('bon_admin_token')||'';
+async function login(){try{let r=await fetch('/admin/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value.trim(),password:password.value})});let d=await r.json();if(!r.ok||!d.success){msg.textContent=d.message||'Đăng nhập thất bại';return}token=d.token;localStorage.setItem('bon_admin_token',token);showPanel()}catch(e){msg.textContent='Không kết nối được server'}}
+function showPanel(){login.style.display='none';panel.style.display='block'}
+function logout(){localStorage.removeItem('bon_admin_token');token='';panel.style.display='none';login.style.display='block'}
+async function api(u,o={}){let r=await fetch(u,{...o,headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,...(o.headers||{})}});if(r.status===401){logout();throw Error('Phiên hết hạn')}return r.json()}
+async function createKey(){try{out.textContent=JSON.stringify(await api('/admin/api/keys',{method:'POST',body:JSON.stringify({duration_hours:+hours.value,price:+price.value,device_limit:+limit.value})}),null,2)}catch(e){out.textContent=e.message}}
+async function loadKeys(){try{keys.textContent=JSON.stringify(await api('/admin/api/keys'),null,2)}catch(e){keys.textContent=e.message}}
+if(token)showPanel();
 </script></body></html>
