@@ -7,6 +7,7 @@ const app = express();
 app.use(express.json({limit: "256kb"}));
 app.use(express.urlencoded({extended: true}));
 app.use(express.static(path.join(__dirname, "public")));
+const adminSessions = new Map();
 
 const PORT = Number(process.env.PORT || 3000);
 const DATA = path.join(__dirname, "data");
@@ -32,6 +33,13 @@ function cfg() {
   return read("config.json", {});
 }
 function adminOk(req) {
+  const auth = String(req.get("Authorization") || "");
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  if (bearer && adminSessions.has(bearer)) {
+    const session = adminSessions.get(bearer);
+    if (session.expiresAt > Date.now()) return true;
+    adminSessions.delete(bearer);
+  }
   const supplied = req.get("X-Admin-Key") || req.query.admin_key ||
                    (req.body && req.body.admin_key) || "";
   const expected = process.env.ADMIN_KEY || "change-this-admin-key";
@@ -88,18 +96,7 @@ function keyResponse(k, deviceId="") {
 }
 
 /* Health/root */
-app.get("/", (req,res)=>json(res,{
-  name:"BON SHOP API", version:"1.0.0", status:"online",
-  endpoints:[
-    "GET /checkkey/api/key.php?APIKey=KEY",
-    "GET /checkkey/api/check_date_key.php?APIKey=KEY&device_id_local=DEVICE",
-    "POST /checkkey/",
-    "GET /checkkey/api/api_golike_fb.php",
-    "GET /checkkey/api/api_golike_tiktok.php",
-    "GET /checkkey/api/announcement.json",
-    "GET /statistics"
-  ]
-}));
+app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
 /* Announcement */
 app.get("/checkkey/api/announcement.json",(req,res)=>{
@@ -285,6 +282,19 @@ app.get("/statistics",(req,res)=>{
   <div class="card">TikTok jobs<div class="n">${completions.filter(x=>x.platform==="tiktok").length}</div></div></div></div></html>`);
 });
 
+/* Admin login */
+app.post("/admin/api/login",(req,res)=>{
+  const email=String(req.body?.email||"").trim();
+  const password=String(req.body?.password||"");
+  const expectedEmail=process.env.ADMIN_EMAIL||"admin@example.com";
+  const expectedPassword=process.env.ADMIN_PASSWORD||"change-this-password";
+  if(email!==expectedEmail || password!==expectedPassword)
+    return json(res,{success:false,message:"Email hoặc mật khẩu không đúng"},401);
+  const token=crypto.randomBytes(32).toString("hex");
+  adminSessions.set(token,{expiresAt:Date.now()+24*60*60*1000});
+  json(res,{success:true,token,expires_in:86400});
+});
+
 /* Admin API: key/job/announcement management */
 app.use("/admin/api",(req,res,next)=>{ if(!adminOk(req)) return json(res,{success:false,message:"Unauthorized"},401); next(); });
 
@@ -337,4 +347,5 @@ app.get("/admin",(req,res)=>res.sendFile(path.join(__dirname,"public","admin.htm
 
 app.use((req,res)=>json(res,{success:false,message:"Endpoint không tồn tại"},404));
 
+app.get("/", (req,res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 app.listen(PORT,()=>console.log(`BON SERVER running on port ${PORT}`));
