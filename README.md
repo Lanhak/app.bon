@@ -114,3 +114,11 @@ Server này đã giữ các path `/checkkey/...`, `/statistics`, `/Key_Free/` đ
 ## 8. Bảo mật
 
 Không dùng các key/mật khẩu cũ đã từng để trong source công khai. Hãy đổi `ADMIN_KEY`, `API_SECRET` và mật khẩu admin trước khi chạy thật.
+
+## Web UI
+
+- `/` — BON main interface
+- `/admin` — Admin login and panel
+- Existing `/checkkey/api/*` and `/statistics` API routes are preserved.
+- Render Dockerfile: `./Dockerfile`
+- Docker build context: `.`

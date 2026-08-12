@@ -1,351 +1,267 @@
 const express = require("express");
-const fs = require("fs");
 const path = require("path");
+const fs = require("fs");
 const crypto = require("crypto");
 
 const app = express();
-app.use(express.json({limit: "256kb"}));
-app.use(express.urlencoded({extended: true}));
-app.use(express.static(path.join(__dirname, "public")));
-const adminSessions = new Map();
+const PORT = process.env.PORT || 3000;
+const DATA_DIR = path.join(__dirname, "data");
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const PORT = Number(process.env.PORT || 3000);
-const DATA = path.join(__dirname, "data");
+const files = {
+  users: path.join(DATA_DIR, "users.json"),
+  keys: path.join(DATA_DIR, "vip_keys.json"),
+  transactions: path.join(DATA_DIR, "transactions.json"),
+  stats: path.join(DATA_DIR, "statistics.json"),
+  announcements: path.join(DATA_DIR, "announcements.json")
+};
 
-function read(name, fallback) {
-  const file = path.join(DATA, name);
-  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
-  catch (_) { write(name, fallback); return fallback; }
+function ensureFile(file, initial) {
+  if (!fs.existsSync(file)) fs.writeFileSync(file, JSON.stringify(initial, null, 2));
 }
-function write(name, value) {
-  const file = path.join(DATA, name);
+ensureFile(files.users, []);
+ensureFile(files.keys, []);
+ensureFile(files.transactions, []);
+ensureFile(files.stats, { totalUsers: 0, totalKeysSold: 0, totalRevenue: 0 });
+ensureFile(files.announcements, { title: "BON SHOP", message: "Chào mừng bạn đến BON SHOP." });
+
+function read(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (_) { return fallback; }
+}
+function write(file, data) {
   const tmp = file + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf8");
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
   fs.renameSync(tmp, file);
 }
-function now() { return new Date().toISOString(); }
-function id() { return crypto.randomUUID(); }
-function sha256(v) { return crypto.createHash("sha256").update(String(v)).digest("hex"); }
-function json(res, body, code=200) {
-  res.status(code).set("Cache-Control","no-store").json(body);
+function id(prefix="id") {
+  return prefix + "_" + crypto.randomBytes(8).toString("hex");
 }
-function cfg() {
-  return read("config.json", {});
+function hashPassword(password, salt=crypto.randomBytes(16).toString("hex")) {
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return { salt, hash };
+}
+function verifyPassword(password, salt, expected) {
+  try {
+    const got = crypto.scryptSync(String(password), salt, 64).toString("hex");
+    return crypto.timingSafeEqual(Buffer.from(got, "hex"), Buffer.from(expected, "hex"));
+  } catch (_) { return false; }
+}
+function b64(v) { return Buffer.from(v).toString("base64url"); }
+function tokenFor(payload) {
+  const body = b64(JSON.stringify(payload));
+  const secret = process.env.API_SECRET || "change-this-api-secret";
+  const sig = crypto.createHmac("sha256", secret).update(body).digest("base64url");
+  return body + "." + sig;
+}
+function readToken(token) {
+  try {
+    const [body, sig] = String(token || "").split(".");
+    if (!body || !sig) return null;
+    const secret = process.env.API_SECRET || "change-this-api-secret";
+    const expected = crypto.createHmac("sha256", secret).update(body).digest("base64url");
+    if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const p = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    if (!p.exp || Date.now() > p.exp) return null;
+    return p;
+  } catch (_) { return null; }
+}
+function bearer(req) {
+  const h = req.get("Authorization") || "";
+  return h.startsWith("Bearer ") ? h.slice(7) : "";
+}
+function userFrom(req) {
+  const p = readToken(bearer(req));
+  if (!p || p.role !== "user") return null;
+  const users = read(files.users, []);
+  return users.find(u => u.id === p.sub && u.status !== "disabled") || null;
 }
 function adminOk(req) {
-  const auth = String(req.get("Authorization") || "");
-  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (bearer && adminSessions.has(bearer)) {
-    const session = adminSessions.get(bearer);
-    if (session.expiresAt > Date.now()) return true;
-    adminSessions.delete(bearer);
+  const h = req.get("Authorization") || "";
+  if (h.startsWith("Bearer ")) {
+    const p = readToken(h.slice(7));
+    if (p && p.role === "admin") return true;
   }
-  const supplied = req.get("X-Admin-Key") || req.query.admin_key ||
-                   (req.body && req.body.admin_key) || "";
-  const expected = process.env.ADMIN_KEY || "change-this-admin-key";
-  return supplied === expected;
+  const supplied = req.get("X-Admin-Key") || req.query.admin_key || ((req.body || {}).admin_key || "");
+  return supplied === (process.env.ADMIN_KEY || "change-this-admin-key");
 }
-function getKey(key) {
-  return read("vip_keys.json", []).find(k => k.key_value === key);
+function json(res, data, status=200) { return res.status(status).json(data); }
+function safeUser(u) {
+  return { id:u.id, username:u.username, email:u.email, balance:u.balance, created_at:u.created_at, status:u.status };
 }
-function validKey(key) {
-  const k = getKey(key);
-  if (!k) return {ok:false, code:404, message:"Key VIP không tồn tại"};
-  if (k.status === "disabled") return {ok:false, code:403, message:"Key VIP đã bị khóa"};
-  if (!k.expires_at || Date.parse(k.expires_at) <= Date.now()) {
-    const keys = read("vip_keys.json", []);
-    const x = keys.find(v => v.id === k.id);
-    if (x) x.status = "expired";
-    write("vip_keys.json", keys);
-    return {ok:false, code:200, message:"Key VIP đã hết hạn"};
-  }
-  return {ok:true, key:k};
+function normalizeUsername(v) { return String(v || "").trim().toLowerCase(); }
+function validEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "")); }
+function generateKey() {
+  return "VIP-" + Array.from({length:4}, () => crypto.randomBytes(3).toString("hex").toUpperCase()).join("-");
 }
-function bindDevice(keyId, deviceId) {
-  if (!deviceId) return {ok:true, count:0, bound:""};
-  const keys = read("vip_keys.json", []);
-  const k = keys.find(x => x.id === keyId);
-  if (!k) return {ok:false, message:"Key không tồn tại"};
-  const devices = read("key_devices.json", []);
-  const hash = sha256(deviceId);
-  let known = devices.find(d => d.key_id === keyId && d.device_hash === hash);
-  const count = devices.filter(d => d.key_id === keyId).length;
-  if (!known && count >= Number(k.device_limit || 1))
-    return {ok:false, message:"Key VIP đã đạt giới hạn thiết bị", device_limit:Number(k.device_limit||1)};
-  if (known) known.last_seen = now();
-  else {
-    known = {id:id(), key_id:keyId, device_hash:hash, first_seen:now(), last_seen:now()};
-    devices.push(known);
-  }
-  write("key_devices.json", devices);
-  return {ok:true, count:devices.filter(d=>d.key_id===keyId).length, bound:deviceId};
-}
-function keyResponse(k, deviceId="") {
-  const devices = read("key_devices.json", []);
-  return {
-    success:true, status:"success",
-    msg:"Xác thực Server thành công: Key VIP hợp lệ!",
-    key:k.key_value, api_key:k.key_value, vip:true,
-    duration_hours:Number(k.duration_hours),
-    expires_at:k.expires_at, endDate:k.expires_at, end_date:k.expires_at,
-    create_date:k.created_at,
-    device_ID:deviceId, device_id:deviceId,
-    device_count:devices.filter(d=>d.key_id===k.id).length,
-    device_limit:Number(k.device_limit||1)
-  };
+function durationLabel(hours) {
+  if (hours % 24 === 0) return (hours/24) + " ngày";
+  return hours + " giờ";
 }
 
-/* Health/root */
-app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
+app.use(express.json({limit:"1mb"}));
+app.use(express.urlencoded({extended:true}));
+app.use(express.static(path.join(__dirname, "public")));
 
-/* Announcement */
-app.get("/checkkey/api/announcement.json",(req,res)=>{
-  json(res, read("announcement.json",{}));
+/* Health / public information */
+app.get("/", (req,res) => res.sendFile(path.join(__dirname,"public","index.html")));
+app.get("/api/health", (req,res) => json(res, {name:"BON SHOP API", version:"2.0.0", status:"online"}));
+app.get("/statistics", (req,res) => {
+  const users=read(files.users,[]), keys=read(files.keys,[]), tx=read(files.transactions,[]);
+  return json(res,{success:true,totalUsers:users.length,totalKeysSold:keys.filter(k=>k.sold_to).length,totalTransactions:tx.length});
+});
+app.get("/checkkey/api/announcement.json",(req,res)=>json(res,read(files.announcements,{title:"BON SHOP",message:"Chào mừng"})));
+
+/* User authentication */
+app.post("/api/auth/register",(req,res)=>{
+  const username=normalizeUsername(req.body.username);
+  const email=String(req.body.email||"").trim().toLowerCase();
+  const password=String(req.body.password||"");
+  if(!/^[a-z0-9_.-]{3,32}$/.test(username)) return json(res,{success:false,message:"Username 3-32 ký tự, chỉ dùng chữ thường, số, _, -, ."},400);
+  if(!validEmail(email)) return json(res,{success:false,message:"Email không hợp lệ"},400);
+  if(password.length<6) return json(res,{success:false,message:"Mật khẩu tối thiểu 6 ký tự"},400);
+  const users=read(files.users,[]);
+  if(users.some(u=>u.username===username)) return json(res,{success:false,message:"Username đã tồn tại"},409);
+  if(users.some(u=>u.email===email)) return json(res,{success:false,message:"Email đã tồn tại"},409);
+  const pw=hashPassword(password);
+  const u={id:id("usr"),username,email,password_hash:pw.hash,password_salt:pw.salt,balance:0,status:"active",created_at:new Date().toISOString()};
+  users.push(u); write(files.users,users);
+  return json(res,{success:true,message:"Đăng ký thành công",user:safeUser(u)},201);
 });
 
-/* Main VIP check: exact response contract used by BON TOOL */
+app.post("/api/auth/login",(req,res)=>{
+  const login=String(req.body.login||req.body.username||req.body.email||"").trim().toLowerCase();
+  const password=String(req.body.password||"");
+  const users=read(files.users,[]);
+  const u=users.find(x=>x.username===login || x.email===login);
+  if(!u || u.status==="disabled" || !verifyPassword(password,u.password_salt,u.password_hash))
+    return json(res,{success:false,message:"Tài khoản hoặc mật khẩu không đúng"},401);
+  const token=tokenFor({role:"user",sub:u.id,iat:Date.now(),exp:Date.now()+7*86400000});
+  return json(res,{success:true,token,user:safeUser(u),expires_in:7*86400});
+});
+
+app.get("/api/auth/me",(req,res)=>{
+  const u=userFrom(req);
+  if(!u) return json(res,{success:false,message:"Unauthorized"},401);
+  return json(res,{success:true,user:safeUser(u)});
+});
+
+/* Products */
+app.get("/api/products",(req,res)=>{
+  return json(res,{success:true,products:[
+    {id:"vip_1d",name:"VIP 1 ngày",duration_hours:24,price:2000},
+    {id:"vip_30d",name:"VIP 30 ngày",duration_hours:720,price:50000},
+    {id:"vip_90d",name:"VIP 90 ngày",duration_hours:2160,price:120000}
+  ]});
+});
+
+/* User wallet — crediting is intentionally admin-only */
+app.get("/api/wallet",(req,res)=>{
+  const u=userFrom(req); if(!u) return json(res,{success:false,message:"Unauthorized"},401);
+  return json(res,{success:true,balance:u.balance});
+});
+
+/* Purchase */
+app.post("/api/shop/buy",(req,res)=>{
+  const u=userFrom(req); if(!u) return json(res,{success:false,message:"Unauthorized"},401);
+  const productId=String(req.body.product_id||"");
+  const products={vip_1d:{name:"VIP 1 ngày",duration_hours:24,price:2000},vip_30d:{name:"VIP 30 ngày",duration_hours:720,price:50000},vip_90d:{name:"VIP 90 ngày",duration_hours:2160,price:120000}};
+  const p=products[productId];
+  if(!p) return json(res,{success:false,message:"Sản phẩm không tồn tại"},400);
+  const users=read(files.users,[]);
+  const idx=users.findIndex(x=>x.id===u.id);
+  if(idx<0) return json(res,{success:false,message:"User không tồn tại"},401);
+  if(Number(users[idx].balance)<p.price) return json(res,{success:false,message:"Số dư không đủ"},400);
+  const keys=read(files.keys,[]);
+  const key={id:id("key"),key:generateKey(),duration_hours:p.duration_hours,price:p.price,device_limit:1,status:"active",created_at:new Date().toISOString(),sold_to:u.id,sold_at:new Date().toISOString()};
+  users[idx].balance-=p.price; keys.push(key);
+  const txs=read(files.transactions,[]);
+  txs.push({id:id("tx"),user_id:u.id,type:"purchase",amount:-p.price,product_id:productId,key_id:key.id,status:"success",created_at:new Date().toISOString()});
+  write(files.users,users); write(files.keys,keys); write(files.transactions,txs);
+  return json(res,{success:true,message:"Mua Key thành công",key:key.key,product:p,balance:users[idx].balance});
+});
+
+app.get("/api/user/keys",(req,res)=>{
+  const u=userFrom(req); if(!u) return json(res,{success:false,message:"Unauthorized"},401);
+  const keys=read(files.keys,[]).filter(k=>k.sold_to===u.id).map(k=>({...k,key:k.key}));
+  return json(res,{success:true,keys});
+});
+app.get("/api/user/transactions",(req,res)=>{
+  const u=userFrom(req); if(!u) return json(res,{success:false,message:"Unauthorized"},401);
+  return json(res,{success:true,transactions:read(files.transactions,[]).filter(t=>t.user_id===u.id)});
+});
+
+/* Legacy check-key API */
 app.get("/checkkey/api/key.php",(req,res)=>{
-  const key = String(req.query.APIKey || req.query.api_key || req.query.key || "").trim();
-  const deviceId = String(req.query.device_id || req.query.deviceId || "").trim();
-  if (!key) return json(res,{status:"invalid",msg:"Thiếu APIKey"},400);
-  const v = validKey(key);
-  if (!v.ok) return json(res,{status:v.message.includes("khóa")?"disabled":v.message.includes("hết")?"expired":"invalid",msg:v.message,key,api_key:key},v.code);
-  const b = bindDevice(v.key.id,deviceId);
-  if (!b.ok) return json(res,{status:"device_limit",msg:b.message,key,api_key:key,device_limit:b.device_limit});
-  json(res,keyResponse(v.key,deviceId));
+  const key=String(req.query.APIKey||"");
+  const k=read(files.keys,[]).find(x=>x.key===key);
+  if(!k) return json(res,{success:false,valid:false,message:"Key không tồn tại"},404);
+  return json(res,{success:true,valid:k.status==="active",key:k.key,status:k.status,duration_hours:k.duration_hours,device_limit:k.device_limit,sold_to:k.sold_to||null});
 });
-
-/* Periodic VIP check */
 app.get("/checkkey/api/check_date_key.php",(req,res)=>{
-  const key = String(req.query.APIKey || req.query.api_key || req.query.key || "").trim();
-  const deviceId = String(req.query.device_id_local || req.query.device_id || req.query.deviceId || "").trim();
-  if (!key) return json(res,{status:"invalid",msg:"Thiếu APIKey"},400);
-  const v = validKey(key);
-  if (!v.ok) return json(res,{status:v.message.includes("khóa")?"disabled":v.message.includes("hết")?"expired":"invalid",msg:v.message,key,api_key:key});
-  const b = bindDevice(v.key.id,deviceId);
-  if (!b.ok) return json(res,{status:"device_limit",msg:b.message,key,api_key:key,device_limit:b.device_limit});
-  json(res,keyResponse(v.key,deviceId));
+  const key=String(req.query.APIKey||"");
+  const k=read(files.keys,[]).find(x=>x.key===key);
+  if(!k) return json(res,{success:false,valid:false,message:"Key không tồn tại"},404);
+  const activated=k.activated_at?new Date(k.activated_at).getTime():null;
+  const expires=activated?activated+k.duration_hours*3600000:null;
+  return json(res,{success:true,valid:k.status==="active",APIKey:k.key,status:k.status,activated_at:k.activated_at||null,expires_at:expires?new Date(expires).toISOString():null,device_id_local:req.query.device_id_local||null});
 });
-
-/* App addHistory: POST JSON */
-app.post("/checkkey/",(req,res)=>{
-  const body=req.body||{};
-  if (body.keyadmin !== (process.env.ADMIN_KEY || "change-this-admin-key"))
-    return json(res,{success:false,message:"Sai keyadmin"},403);
-  if (body.action !== "addHistory")
-    return json(res,{success:false,message:"Action không hợp lệ"},400);
-  const deviceId=String(body.device_id||"").trim();
-  const money=Number(body.money||0);
-  const nameTool=String(body.name_tool||"").trim();
-  if (!deviceId || money<=0) return json(res,{success:false,message:"Thiếu device_id hoặc money"});
-  if (money>100000) return json(res,{success:false,message:"Số tiền cộng quá lớn"});
-  const hash=sha256(deviceId);
-  const credits=read("app_credits",[]);
-  const hourAgo=Date.now()-3600000;
-  const rate=credits.filter(x=>x.device_hash===hash && Date.parse(x.created_at)>=hourAgo).length;
-  if(rate>=60) return json(res,{success:false,message:"Đã vượt giới hạn cộng xu trong giờ này"});
-  const devices=read("key_devices",[]);
-  const keys=read("vip_keys",[]);
-  const d=devices.filter(x=>x.device_hash===hash).sort((a,b)=>Date.parse(b.last_seen)-Date.parse(a.last_seen))[0];
-  const k=d ? keys.find(x=>x.id===d.key_id) : null;
-  if(!k || !k.user_id) return json(res,{success:false,message:"Thiết bị chưa kích hoạt Key VIP"});
-  const vv=validKey(k.key_value);
-  if(!vv.ok) return json(res,{success:false,message:"Key VIP hết hạn hoặc bị khóa"});
-  const users=read("users",[]);
-  const u=users.find(x=>x.id===k.user_id);
-  if(!u) return json(res,{success:false,message:"Không tìm thấy tài khoản"});
-  u.balance=Number(u.balance||0)+money;
-  const t=read("balance_transactions",[]);
-  t.push({id:id(),user_id:u.id,amount:money,balance_after:u.balance,type:"admin_topup",description:"App "+(nameTool||"GOLIKE"),created_at:now()});
-  credits.push({id:id(),user_id:u.id,device_hash:hash,name_tool:nameTool,amount:money,created_at:now()});
-  write("users",users); write("balance_transactions",t); write("app_credits",credits);
-  json(res,{success:true,message:`Đã cộng ${money} xu cho ${nameTool}`,data:{username:u.username||u.email,balance:u.balance,money}});
+app.post("/checkkey/",(req,res)=>json(res,{success:false,message:"Use /api/auth/login or /api/shop/buy"}));
+app.get("/checkkey/api/load_history.php",(req,res)=>{
+  const u=userFrom(req);
+  if(u) return json(res,{success:true,history:read(files.transactions,[]).filter(t=>t.user_id===u.id)});
+  return json(res,{success:true,history:read(files.transactions,[]).slice(-50)});
 });
+app.get("/checkkey/api/api_golike_fb.php",(req,res)=>json(res,{success:true,tasks:[]}));
+app.get("/checkkey/api/api_golike_tiktok.php",(req,res)=>json(res,{success:true,tasks:[]}));
 
-/* Facebook GoLike API */
-app.get("/checkkey/api/api_golike_fb.php",(req,res)=>{
-  const action=String(req.query.action||"");
-  const apiKey=String(req.query.APIKey||"").trim();
-  const deviceId=String(req.query.device_id_local||"").trim();
-  const v=validKey(apiKey);
-  if(!v.ok) return json(res,{success:false,message:v.message});
-  if(!["get_jobs","complete_job","report_job"].includes(action))
-    return json(res,{success:false,message:"Action không hợp lệ"},400);
-  const hash=deviceId?sha256(deviceId):"";
-  const jobs=read("fb_jobs",[]);
-  const completions=read("job_completions",[]);
-  if(action==="get_jobs"){
-    let available=jobs.filter(j=>j.status==="active" && Number(j.used_count)<Number(j.max_uses||9999) &&
-      (!hash || !completions.some(c=>c.platform==="facebook"&&c.job_id===j.id&&c.device_hash===hash)));
-    if(!available.length) return json(res,{success:false,message:"Tạm hết nhiệm vụ"});
-    const j=available[Math.floor(Math.random()*available.length)];
-    return json(res,{success:true,message:"OK",data:{
-      id:j.id,job_id:j.id,link:j.link,type:j.type||"like",reaction:j.reaction||"like",
-      object_id:j.object_id,price_per_after_cost:Number(j.price||35),
-      fix_coin:Number(j.price||35),coin:Number(j.price||35)
-    }});
-  }
-  const jobId=Number(req.query.job_id||0);
-  if(action==="complete_job"){
-    if(!jobId) return json(res,{success:false,message:"Thiếu job_id"});
-    if(!hash) return json(res,{success:false,message:"Thiếu device_id_local"});
-    const j=jobs.find(x=>Number(x.id)===jobId);
-    if(!j) return json(res,{success:false,message:"Không tìm thấy công việc"});
-    if(j.status!=="active") return json(res,{success:false,message:"Công việc đã bị khóa"});
-    const exists=completions.some(c=>c.platform==="facebook"&&Number(c.job_id)===jobId&&c.device_hash===hash);
-    if(!exists){
-      completions.push({id:id(),platform:"facebook",job_id:jobId,device_hash:hash,user_id:v.key.user_id||null,amount:Number(j.price||35),status:"done",created_at:now()});
-      j.used_count=Number(j.used_count||0)+1;
-      write("job_completions",completions); write("fb_jobs",jobs);
-    }
-    return json(res,{success:true,message:"Hoàn thành nhiệm vụ Facebook thành công",data:{
-      job_id:jobId,object_id:String(req.query.object_id||j.object_id),fix_coin:Number(j.price||35),price_per_after_cost:Number(j.price||35)
-    }});
-  }
-  if(!jobId) return json(res,{success:false,message:"Thiếu job_id"});
-  const reports=read("job_reports",[]);
-  reports.push({id:id(),platform:"facebook",job_id:jobId,uid:String(req.query.uid||""),device_hash:hash,description:String(req.query.description||""),created_at:now()});
-  write("job_reports",reports);
-  json(res,{success:true,message:"Đã ghi nhận báo cáo công việc"});
-});
-
-/* TikTok GoLike API */
-app.get("/checkkey/api/api_golike_tiktok.php",(req,res)=>{
-  const action=String(req.query.action||"");
-  const apiKey=String(req.query.APIKey||"").trim();
-  const deviceId=String(req.query.device_id_local||"").trim();
-  if(action!=="complete_job") return json(res,{success:false,message:"Action không hợp lệ"},400);
-  const v=validKey(apiKey);
-  if(!v.ok) return json(res,{success:false,message:v.message});
-  const adsId=String(req.query.ads_id||"").trim();
-  const accountId=String(req.query.account_id||"").trim();
-  if(!adsId) return json(res,{success:false,message:"Thiếu ads_id"});
-  if(!deviceId) return json(res,{success:false,message:"Thiếu device_id_local"});
-  const hash=sha256(deviceId);
-  const jobs=read("tiktok_jobs",[]);
-  const completions=read("job_completions",[]);
-  const j=jobs.find(x=>String(x.ads_id)===adsId);
-  const price=j?Number(j.price||20):20;
-  if(j && j.status!=="active") return json(res,{success:false,message:"Công việc đã bị khóa"});
-  if(j){
-    const exists=completions.some(c=>c.platform==="tiktok"&&Number(c.job_id)===Number(j.id)&&c.device_hash===hash);
-    if(!exists){
-      completions.push({id:id(),platform:"tiktok",job_id:j.id,device_hash:hash,user_id:v.key.user_id||null,amount:price,status:"done",created_at:now()});
-      j.used_count=Number(j.used_count||0)+1;
-      write("job_completions",completions); write("tiktok_jobs",jobs);
-    }
-  }
-  json(res,{success:true,message:"Hoàn thành nhiệm vụ TikTok thành công",data:{ads_id:adsId,account_id:accountId,fix_coin:price}});
-});
-
-/* API secret check-key compatibility */
-app.post("/api/check-key.php",(req,res)=>{
-  const secret=req.get("X-API-Key")||req.query.api_key||"";
-  if(secret!==(process.env.API_SECRET||"change-this-api-secret"))
-    return json(res,{success:false,message:"Unauthorized"},401);
-  const body=req.body||{};
-  const key=String(body.key||body.key_value||"").trim();
-  const device=String(body.device_hash||"").replace(/[^a-fA-F0-9]/g,"");
-  if(!key || device.length!==64) return json(res,{success:false,status:"invalid_request",message:"key và device_hash SHA-256 64 hex là bắt buộc"},400);
-  const v=validKey(key);
-  if(!v.ok) return json(res,{success:false,status:v.message.includes("khóa")?"disabled":"expired",message:v.message});
-  const devices=read("key_devices",[]);
-  let d=devices.find(x=>x.key_id===v.key.id&&x.device_hash===device);
-  const count=devices.filter(x=>x.key_id===v.key.id).length;
-  if(!d&&count>=Number(v.key.device_limit||1)) return json(res,{success:false,status:"device_limit",message:"Key đã đạt giới hạn thiết bị",device_limit:Number(v.key.device_limit||1)},409);
-  if(d)d.last_seen=now(); else devices.push({id:id(),key_id:v.key.id,device_hash:device,first_seen:now(),last_seen:now()});
-  write("key_devices",devices);
-  json(res,{success:true,status:"active",message:"Key hợp lệ",key:v.key.key_value,expires_at:v.key.expires_at,device_limit:Number(v.key.device_limit||1)});
-});
-
-/* Key Free display page */
-app.get("/Key_Free/",(req,res)=>{
-  const key=String(req.query.key||"").trim();
-  res.send(`<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>BON SHOP — Key Free</title><style>body{font:15px Arial;background:#070b16;color:#edf2ff;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:20px}.card{max-width:420px;width:100%;padding:30px;border:1px solid #2a3e68;border-radius:24px;background:#0d1729;text-align:center}.key{padding:18px;margin:18px 0;border:1px dashed #3b5fa4;border-radius:16px;color:#66e3ff;font:700 20px monospace;word-break:break-all}.btn{padding:13px;width:100%;border:0;border-radius:11px;background:#3566ff;color:#fff;font-weight:700}</style>
-  <div class="card"><b>BON SHOP · KEY FREE</b><h2>${key?"Mã kích hoạt của bạn":"Thiếu mã key"}</h2>${key?`<p>Sao chép mã và dán vào app BON_TOOL.</p><div class="key" id="k">${escapeHtml(key)}</div><button class="btn" onclick="navigator.clipboard.writeText(document.getElementById('k').innerText)">📋 Sao chép mã</button>`:"<p>Không tìm thấy mã kích hoạt.</p>"}</div></html>`);
-});
-function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
-
-/* Statistics page */
-app.get("/statistics",(req,res)=>{
-  const users=read("users",[]), keys=read("vip_keys",[]), devices=read("key_devices",[]);
-  const completions=read("job_completions",[]);
-  const earned=read("balance_transactions",[]).filter(x=>Number(x.amount)>0).reduce((a,x)=>a+Number(x.amount),0);
-  const active=keys.filter(k=>k.status==="active"&&Date.parse(k.expires_at||0)>Date.now()).length;
-  res.send(`<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>BON SHOP — Thống kê</title>
-  <style>body{font:15px Arial;background:#070b16;color:#edf2ff;padding:18px}.wrap{max-width:760px;margin:auto}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.card{padding:18px;border:1px solid #263a5b;border-radius:16px;background:#0d1729;margin-bottom:12px}.n{font-size:28px;font-weight:700;margin-top:6px}@media(max-width:520px){.grid{grid-template-columns:1fr}}</style>
-  <div class="wrap"><div class="card"><b>BON SHOP · THỐNG KÊ</b><h1>BON SHOP</h1><p>Hệ thống dịch vụ số · Node.js + JSON</p></div>
-  <div class="grid"><div class="card">Người dùng<div class="n">${users.length}</div></div><div class="card">Key VIP đang hoạt động<div class="n">${active}</div></div>
-  <div class="card">Thiết bị kích hoạt<div class="n">${devices.length}</div></div><div class="card">Tổng xu đã chi trả<div class="n">${earned.toLocaleString("vi-VN")}</div></div>
-  <div class="card">Facebook jobs<div class="n">${completions.filter(x=>x.platform==="facebook").length}</div></div>
-  <div class="card">TikTok jobs<div class="n">${completions.filter(x=>x.platform==="tiktok").length}</div></div></div></div></html>`);
-});
-
-/* Admin login */
+/* Admin auth */
 app.post("/admin/api/login",(req,res)=>{
-  const email=String(req.body?.email||"").trim();
-  const password=String(req.body?.password||"");
-  const expectedEmail=process.env.ADMIN_EMAIL||"admin@example.com";
-  const expectedPassword=process.env.ADMIN_PASSWORD||"change-this-password";
-  if(email!==expectedEmail || password!==expectedPassword)
-    return json(res,{success:false,message:"Email hoặc mật khẩu không đúng"},401);
-  const token=crypto.randomBytes(32).toString("hex");
-  adminSessions.set(token,{expiresAt:Date.now()+24*60*60*1000});
-  json(res,{success:true,token,expires_in:86400});
+  const email=String(req.body.email||"").trim().toLowerCase();
+  const password=String(req.body.password||"");
+  const expectedEmail=String(process.env.ADMIN_EMAIL||"admin@example.com").trim().toLowerCase();
+  const expectedPassword=String(process.env.ADMIN_PASSWORD||"change-this-password");
+  if(email!==expectedEmail || password!==expectedPassword) return json(res,{success:false,message:"Email hoặc mật khẩu không đúng"},401);
+  return json(res,{success:true,token:tokenFor({role:"admin",iat:Date.now(),exp:Date.now()+86400000}),expires_in:86400});
 });
+app.get("/admin/api/me",(req,res)=>adminOk(req)?json(res,{success:true,role:"admin"}):json(res,{success:false,message:"Unauthorized"},401));
 
-/* Admin API: key/job/announcement management */
-app.use("/admin/api",(req,res,next)=>{ if(!adminOk(req)) return json(res,{success:false,message:"Unauthorized"},401); next(); });
-
-app.get("/admin/api/keys",(req,res)=>json(res,{success:true,data:read("vip_keys",[])}));
+app.use("/admin/api",(req,res,next)=>{
+  if(req.path==="/login" || req.path==="/me") return next();
+  if(!adminOk(req)) return json(res,{success:false,message:"Unauthorized"},401);
+  next();
+});
+app.get("/admin/api/users",(req,res)=>json(res,{success:true,users:read(files.users,[]).map(safeUser)}));
+app.post("/admin/api/users/:id/balance",(req,res)=>{
+  const amount=Number(req.body.amount);
+  if(!Number.isFinite(amount)) return json(res,{success:false,message:"Amount không hợp lệ"},400);
+  const users=read(files.users,[]); const i=users.findIndex(u=>u.id===req.params.id);
+  if(i<0) return json(res,{success:false,message:"Không tìm thấy user"},404);
+  users[i].balance=Math.max(0,Number(users[i].balance||0)+amount); write(files.users,users);
+  const txs=read(files.transactions,[]); txs.push({id:id("tx"),user_id:users[i].id,type:amount>=0?"admin_credit":"admin_debit",amount,admin:true,status:"success",created_at:new Date().toISOString()}); write(files.transactions,txs);
+  return json(res,{success:true,user:safeUser(users[i])});
+});
+app.get("/admin/api/keys",(req,res)=>json(res,{success:true,keys:read(files.keys,[])}));
 app.post("/admin/api/keys",(req,res)=>{
-  const body=req.body||{}, hours=Number(body.duration_hours||0);
-  if(hours<=0)return json(res,{success:false,message:"duration_hours không hợp lệ"},400);
-  const keys=read("vip_keys",[]);
-  let key=String(body.key_value||"").trim();
-  if(!key) key="VIP-"+crypto.randomBytes(3).toString("hex").toUpperCase()+"-"+crypto.randomBytes(4).toString("hex").toUpperCase();
-  if(keys.some(k=>k.key_value===key))return json(res,{success:false,message:"Key đã tồn tại"},409);
-  const item={id:id(),key_value:key,duration_hours:hours,price:Number(body.price||0),expires_at:new Date(Date.now()+hours*3600000).toISOString(),device_limit:Number(body.device_limit||1),status:"active",user_id:body.user_id||null,note:String(body.note||""),created_at:now(),updated_at:now()};
-  keys.push(item); write("vip_keys",keys); json(res,{success:true,data:item});
-});
-app.patch("/admin/api/keys/:id",(req,res)=>{
-  const keys=read("vip_keys",[]), k=keys.find(x=>x.id===req.params.id);
-  if(!k)return json(res,{success:false,message:"Không tìm thấy key"},404);
-  if(req.body.status)k.status=req.body.status;
-  if(req.body.device_limit)k.device_limit=Number(req.body.device_limit);
-  if(req.body.extend_hours)k.expires_at=new Date(Math.max(Date.now(),Date.parse(k.expires_at||0))+Number(req.body.extend_hours)*3600000).toISOString(),k.status="active";
-  k.updated_at=now(); write("vip_keys",keys); json(res,{success:true,data:k});
+  const hours=Math.max(1,Number(req.body.duration_hours||24));
+  const price=Math.max(0,Number(req.body.price||0));
+  const limit=Math.max(1,Number(req.body.device_limit||1));
+  const keys=read(files.keys,[]);
+  const k={id:id("key"),key:generateKey(),duration_hours:hours,price,device_limit:limit,status:"active",created_at:new Date().toISOString()};
+  keys.push(k); write(files.keys,keys); return json(res,{success:true,key:k});
 });
 app.delete("/admin/api/keys/:id",(req,res)=>{
-  const keys=read("vip_keys",[]); const i=keys.findIndex(x=>x.id===req.params.id);
-  if(i<0)return json(res,{success:false,message:"Không tìm thấy key"},404);
-  keys[i].status="disabled"; keys[i].updated_at=now(); write("vip_keys",keys);
-  json(res,{success:true,message:"Đã khóa key"});
+  const keys=read(files.keys,[]); const i=keys.findIndex(k=>k.id===req.params.id);
+  if(i<0)return json(res,{success:false,message:"Không tìm thấy Key"},404);
+  keys[i].status="disabled"; write(files.keys,keys); return json(res,{success:true,key:keys[i]});
 });
-app.get("/admin/api/jobs/:platform",(req,res)=>{
-  const file=req.params.platform==="facebook"?"fb_jobs.json":"tiktok_jobs.json";
-  json(res,{success:true,data:read(file,[])});
+app.get("/admin/api/transactions",(req,res)=>json(res,{success:true,transactions:read(files.transactions,[])}));
+app.get("/admin/api/statistics",(req,res)=>{
+  const users=read(files.users,[]),keys=read(files.keys,[]),tx=read(files.transactions,[]);
+  return json(res,{success:true,totalUsers:users.length,totalKeys:keys.length,soldKeys:keys.filter(k=>k.sold_to).length,revenue:tx.filter(t=>t.type==="purchase").reduce((s,t)=>s+Math.abs(Number(t.amount||0)),0)});
 });
-app.post("/admin/api/jobs/:platform",(req,res)=>{
-  const file=req.params.platform==="facebook"?"fb_jobs.json":"tiktok_jobs.json";
-  const b=req.body||{}, arr=read(file,[]);
-  const item={id:Date.now(),...b,price:Number(b.price||20),max_uses:Number(b.max_uses||9999),used_count:0,status:"active",created_at:now()};
-  arr.push(item); write(file,arr); json(res,{success:true,data:item});
-});
-app.patch("/admin/api/jobs/:platform/:id",(req,res)=>{
-  const file=req.params.platform==="facebook"?"fb_jobs.json":"tiktok_jobs.json";
-  const arr=read(file,[]), x=arr.find(v=>String(v.id)===String(req.params.id));
-  if(!x)return json(res,{success:false,message:"Không tìm thấy job"},404);
-  Object.assign(x,req.body||{}); write(file,arr); json(res,{success:true,data:x});
-});
-app.get("/admin/api/announcement",(req,res)=>json(res,{success:true,data:read("announcement.json",{})}));
 app.put("/admin/api/announcement",(req,res)=>{
-  const a={...read("announcement.json",{}),...(req.body||{}),updated_at:now()}; write("announcement.json",a); json(res,{success:true,data:a});
+  const data={title:String(req.body.title||"BON SHOP"),message:String(req.body.message||""),updated_at:new Date().toISOString()};
+  write(files.announcements,data); return json(res,{success:true,announcement:data});
 });
-app.get("/admin",(req,res)=>res.sendFile(path.join(__dirname,"public","admin.html")));
 
-app.use((req,res)=>json(res,{success:false,message:"Endpoint không tồn tại"},404));
-
-app.get("/", (req,res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 app.listen(PORT,()=>console.log(`BON SERVER running on port ${PORT}`));
