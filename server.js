@@ -57,6 +57,14 @@ const MIGRATION="CREATE TABLE IF NOT EXISTS users (\n id BIGSERIAL PRIMARY KEY,\
 async function migrate(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
  await pool.query(MIGRATION);
+ // Additive compatibility migration for BON databases created by older builds.
+ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()");
+ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'");
+ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)");
+ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance BIGINT DEFAULT 0");
+ await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()");
+ await pool.query("UPDATE users SET role='user' WHERE role IS NULL");
+ await pool.query("UPDATE users SET balance=0 WHERE balance IS NULL");
  await pool.query("UPDATE vip_keys SET status='expired',updated_at=NOW() WHERE status='active' AND (expires_at IS NULL OR expires_at<=NOW())");
  await ensureAdmin();
 }
