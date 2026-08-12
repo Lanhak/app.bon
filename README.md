@@ -38,3 +38,9 @@ A server-side redirect cannot rewrite a hard-coded URL inside an APK.
 
 The old PHP `config.php` contained database/admin/API credentials. They are NOT
 copied into this project. Rotate those old credentials.
+
+## Render port-first startup fix
+
+The HTTP listener binds to `0.0.0.0:$PORT` before PostgreSQL migration.
+This prevents Render's port scanner from timing out while PostgreSQL is
+unavailable. `/health` returns 503 until the database is ready, then 200.

@@ -356,4 +356,30 @@ app.post('/admin/job/fb',requireAdmin,async(req,res)=>{await pool.query("INSERT 
 app.post('/admin/job/tt',requireAdmin,async(req,res)=>{await pool.query("INSERT INTO tiktok_jobs(video_url,ads_id,account_id,price,max_uses) VALUES($1,$2,$3,$4,$5)",[req.body.video_url||'',req.body.ads_id,req.body.account_id||'',Number(req.body.price||20),Number(req.body.max_uses||9999)]);res.redirect('/admin')});
 
 app.use((req,res)=>res.status(404).send(layout('404',`<div class="card"><h1>404</h1><p>Không tìm thấy đường dẫn.</p><a href="/">Về trang chủ</a></div>`)));
-migrate().then(()=>app.listen(PORT,'0.0.0.0',()=>console.log(`BON SHOP running on 0.0.0.0:${PORT}`))).catch(e=>{console.error('Startup failed:',e);process.exit(1)});
+let databaseReady = false;
+let databaseError = null;
+
+app.get('/health', (req,res) => {
+  res.status(databaseReady ? 200 : 503).json({
+    ok: databaseReady,
+    service: 'bon-shop',
+    database: databaseReady ? 'connected' : 'connecting',
+    error: databaseReady ? null : databaseError
+  });
+});
+
+// Bind the web port FIRST. Render must see an open port even when PostgreSQL
+// is waking up or temporarily unreachable.
+app.listen(PORT,'0.0.0.0',()=>{
+  console.log(`BON SHOP running on 0.0.0.0:${PORT}`);
+  migrate()
+    .then(()=>{
+      databaseReady = true;
+      console.log('BON SHOP database ready');
+    })
+    .catch(e=>{
+      databaseError = e && e.message ? e.message : String(e);
+      console.error('Database initialization failed:', e);
+      // Keep HTTP alive; /health reports 503 until DB is available.
+    });
+});
