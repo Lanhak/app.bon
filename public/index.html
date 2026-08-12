@@ -1,76 +1,33 @@
-<!doctype html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>BON • Automation • MMO</title>
-<link rel="stylesheet" href="/style.css">
-</head>
-<body>
-<header class="top">
-  <div class="brand">
-    <div class="logo">B</div>
-    <div>
-      <b>AI • AUTOMATION • MMO</b>
-      <small>⚡ HỆ THỐNG KIẾM TIỀN ONLINE 24/7</small>
-    </div>
-  </div>
-  <div class="bell">🔔</div>
-</header>
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BON SHOP</title><link rel="stylesheet" href="/style.css"></head>
+<body><header><div><b>⚡ BON SHOP</b><small>AI • AUTOMATION • MMO</small></div><a href="/admin">ADMIN</a></header>
+<main>
+<section id="auth" class="card">
+<h2>🔐 Tài khoản</h2>
+<div class="tabs"><button onclick="tab('login')">Đăng nhập</button><button onclick="tab('register')">Đăng ký</button></div>
+<div id="login"><input id="ll" placeholder="Username hoặc Email"><input id="lp" type="password" placeholder="Mật khẩu"><button onclick="login()">ĐĂNG NHẬP</button></div>
+<div id="register" class="hide"><input id="ru" placeholder="Username"><input id="re" placeholder="Email"><input id="rp" type="password" placeholder="Mật khẩu"><button onclick="register()">TẠO TÀI KHOẢN</button></div><pre id="authMsg"></pre></section>
 
-<section class="vip-banner">
-  <span>👑 <b>VIP:</b> và gia tăng thu nhập!</span>
-  <button onclick="show('shop')">Nâng cấp lên Key</button>
+<section id="app" class="hide">
+<div class="card balance"><span>Số dư</span><strong id="balance">0đ</strong><button onclick="refresh()">↻</button></div>
+<div class="grid">
+<div class="card"><h3>🛒 Mua VIP</h3><div id="products"></div></div>
+<div class="card"><h3>🔑 Key của tôi</h3><pre id="keys">Đang tải...</pre></div>
+<div class="card"><h3>💳 Lịch sử</h3><pre id="tx">Đang tải...</pre></div>
+</div>
+<button class="logout" onclick="logout()">ĐĂNG XUẤT</button>
 </section>
-
-<main id="content">
-  <section id="home" class="page active">
-    <div class="hero card">
-      <h1>Chào mừng đến BON</h1>
-      <p>Hệ thống hỗ trợ tự động hóa và quản lý nhiệm vụ.</p>
-      <button onclick="show('shop')">Khám phá cửa hàng</button>
-    </div>
-    <div class="grid">
-      <div class="card"><h3>🔑 VIP Key</h3><p>Quản lý và kích hoạt Key của bạn.</p></div>
-      <div class="card"><h3>📊 Thống kê</h3><p>Xem thông tin hoạt động và số dư.</p></div>
-    </div>
-  </section>
-
-  <section id="shop" class="page">
-    <div class="card">
-      <h2>🛒 Cửa hàng</h2>
-      <div class="plans">
-        <div class="plan"><h3>1 Ngày</h3><strong>2.000đ</strong><p>VIP 24 giờ</p></div>
-        <div class="plan"><h3>30 Ngày</h3><strong>50.000đ</strong><p>VIP 30 ngày</p></div>
-        <div class="plan"><h3>90 Ngày</h3><strong>120.000đ</strong><p>VIP 90 ngày</p></div>
-      </div>
-      <p class="muted">Liên hệ quản trị viên để mua hoặc gia hạn Key.</p>
-    </div>
-  </section>
-
-  <section id="stats" class="page">
-    <div class="card"><h2>📊 Thống kê</h2><div id="statsBox">Đang tải...</div></div>
-  </section>
-
-  <section id="account" class="page">
-    <div class="card">
-      <h2>👤 Tài khoản</h2>
-      <input id="keyInput" placeholder="Nhập VIP Key">
-      <input id="deviceInput" placeholder="Device ID (nếu cần)">
-      <button onclick="checkKey()">KIỂM TRA KEY</button>
-      <pre id="keyResult"></pre>
-    </div>
-  </section>
 </main>
-
-<nav class="nav">
-  <button onclick="show('home')">⌂<span>Trang chủ</span></button>
-  <button onclick="show('shop')">▤<span>Cửa hàng</span></button>
-  <button class="coin" onclick="show('shop')">◎<span>Kiếm xu</span></button>
-  <button onclick="show('stats');loadStats()">▦<span>Thống kê</span></button>
-  <button onclick="show('account')">♟<span>Tài khoản</span></button>
-</nav>
-
-<script src="/app.js"></script>
-</body>
-</html>
+<script>
+let token=localStorage.getItem("bon_user_token")||"";
+const $=id=>document.getElementById(id);
+function tab(x){$("login").classList.toggle("hide",x!=="login");$("register").classList.toggle("hide",x!=="register")}
+async function req(url,opt={}){const r=await fetch(url,{...opt,headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,...(opt.headers||{})}});let d={};try{d=await r.json()}catch(_){}if(r.status===401){logout();throw Error(d.message||"Phiên hết hạn")}if(!r.ok)throw Error(d.message||"Lỗi");return d}
+async function login(){try{let d=await req("/api/auth/login",{method:"POST",body:JSON.stringify({login:$("ll").value,password:$("lp").value})});token=d.token;localStorage.setItem("bon_user_token",token);showApp();refresh()}catch(e){$("authMsg").textContent=e.message}}
+async function register(){try{let d=await req("/api/auth/register",{method:"POST",body:JSON.stringify({username:$("ru").value,email:$("re").value,password:$("rp").value})});$("authMsg").textContent=d.message;tab("login")}catch(e){$("authMsg").textContent=e.message}}
+async function showApp(){ $("auth").classList.add("hide");$("app").classList.remove("hide"); await loadProducts()}
+async function loadProducts(){let d=await req("/api/products");$("products").innerHTML=d.products.map(p=>`<div class="product"><b>${p.name}</b><strong>${p.price.toLocaleString()}đ</strong><small>${p.duration_hours/24} ngày</small><button onclick="buy('${p.id}')">MUA</button></div>`).join("")}
+async function buy(id){if(!confirm("Xác nhận mua Key?"))return;try{let d=await req("/api/shop/buy",{method:"POST",body:JSON.stringify({product_id:id})});alert("Mua thành công!\\nKey: "+d.key);refresh()}catch(e){alert(e.message)}}
+async function refresh(){try{let me=await req("/api/auth/me");$("balance").textContent=Number(me.user.balance).toLocaleString()+"đ";let k=await req("/api/user/keys");$("keys").textContent=k.keys.length?JSON.stringify(k.keys,null,2):"Chưa có Key";let t=await req("/api/user/transactions");$("tx").textContent=t.transactions.length?JSON.stringify(t.transactions,null,2):"Chưa có giao dịch"}catch(e){}}
+function logout(){localStorage.removeItem("bon_user_token");token="";$("app").classList.add("hide");$("auth").classList.remove("hide")}
+(async()=>{if(token){try{await req("/api/auth/me");showApp();refresh()}catch(_){}}})();
+</script></body></html>
