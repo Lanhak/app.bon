@@ -1,8 +1,8 @@
 {
   "name": "bon-server-render",
-  "version": "2.0.0",
-  "private": true,
-  "type": "commonjs",
+  "version": "3.0.0",
+  "description": "BON SHOP server migrated from supplied BON_TOOL APK and PHP source to Node.js/PostgreSQL for GitHub + Render",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "express-session": "^1.18.1",
     "pg": "^8.16.3"
   }
 }
