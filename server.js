@@ -101,6 +101,9 @@ function durationLabel(hours) {
 app.use(express.json({limit:"1mb"}));
 app.use(express.urlencoded({extended:true}));
 app.use(express.static(path.join(__dirname, "public")));
+app.get("/admin", (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "admin.html"));
+});
 
 /* Health / public information */
 app.get("/", (req,res) => res.sendFile(path.join(__dirname,"public","index.html")));
