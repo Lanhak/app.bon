@@ -1,19 +1,10 @@
 {
-  "name": "bon-server-render",
-  "version": "4.0.0",
-  "private": true,
-  "description": "BON SHOP server for Render + PostgreSQL, compatible with BON_TOOL APK API contracts",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "check": "node --check server.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "express": "^4.21.2",
-    "pg": "^8.16.3"
-  }
+  "name":"bon-server-render",
+  "version":"5.0.0",
+  "private":true,
+  "description":"BON SHOP server - Render/PostgreSQL, compatible with BON_TOOL API contract",
+  "main":"server.js",
+  "scripts":{"start":"node server.js","check":"node --check server.js"},
+  "engines":{"node":">=20"},
+  "dependencies":{"bcryptjs":"^2.4.3","express":"^4.21.2","pg":"^8.16.3"}
 }
