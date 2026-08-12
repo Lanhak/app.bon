@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: bonshop
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bonshop-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: API_SECRET
+        generateValue: true
+      - key: KEYADMIN
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: APP_URL
+        value: https://bonshop.onrender.com
+      - key: WITHDRAW_MIN
+        value: "10000"
+      - key: BANKS_JSON
+        sync: false
+databases:
+  - name: bonshop-db
+    plan: free

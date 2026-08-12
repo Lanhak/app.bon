@@ -1,124 +1,62 @@
-# BON TOOL Server — Node.js + JSON
+# BON SERVER — GitHub + Render
 
-Server này được làm để giữ **đường dẫn API và JSON response tương thích với BON TOOL** đã cung cấp.
+Bản chuyển đổi từ `web_BON_TOOL.ZIP` sang Node.js/Express + PostgreSQL để chạy trên Render.
 
-## 1. Cài đặt
+## Đã đối chiếu với BON_TOOL.apk
 
-Yêu cầu Node.js 18+.
+Các host/path legacy được giữ nguyên dưới `https://bonshop.onrender.com`:
+
+- `GET /checkkey/api/key.php?APIKey=...`
+- `GET /checkkey/api/check_date_key.php?...`
+- `GET /checkkey/api/api_golike_fb.php?action=get_jobs|complete_job|report_job`
+- `GET /checkkey/api/api_golike_tiktok.php?action=complete_job`
+- `POST /checkkey/` (`addHistory`)
+- `GET /checkkey/api/announcement.json`
+- `GET /Key_Free/?key=...`
+- `GET /statistics`
+- `POST/GET /api/check-key.php`
+- `GET /api/`
+- `GET /health`
+
+Các response quan trọng giữ các field mà APK dùng như `status`, `msg`, `end_date`, `device_ID`, `create_date`, `success`, `message`, `data`, `job_id`, `object_id`, `fix_coin`, `price_per_after_cost`.
+
+## Database
+
+Render filesystem không nên được dùng làm nơi lưu dữ liệu sản xuất. Server dùng PostgreSQL qua `DATABASE_URL` và chạy `schema.sql` khi khởi động.
+
+## Render
+
+`render.yaml` đã có Web Service + PostgreSQL. Sau khi tạo service, đặt:
+
+- `DATABASE_URL` — Render tự nối từ database trong Blueprint.
+- `SESSION_SECRET` — secret.
+- `API_SECRET` — secret dùng cho `/api/check-key.php`.
+- `KEYADMIN` — giá trị keyadmin mà APK hiện tại gửi khi gọi `/checkkey/`.
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD`
+- `BANKS_JSON`
+- `APP_URL=https://bonshop.onrender.com`
+- `WITHDRAW_MIN=10000`
+
+**Không commit credential thật vào GitHub.**
+
+## Local
 
 ```bash
 npm install
+DATABASE_URL=postgresql://... SESSION_SECRET=dev API_SECRET=dev KEYADMIN=... npm start
 ```
 
-Tạo `.env` từ `.env.example` và đổi:
-- `PORT`
-- `ADMIN_KEY`
-- `API_SECRET`
-- `ADMIN_EMAIL`
-- `ADMIN_PASSWORD`
+Health:
 
-Chạy:
-
-```bash
-npm start
+```text
+GET http://localhost:3000/health
 ```
 
-## 2. Endpoint tương thích app
+## APK host
 
-- `GET /checkkey/api/key.php?APIKey=KEY`
-- `GET /checkkey/api/check_date_key.php?APIKey=KEY&device_id_local=DEVICE_ID`
-- `POST /checkkey/`
-- `GET /checkkey/api/api_golike_fb.php?action=get_jobs&platform=facebook&APIKey=KEY&device_id_local=DEVICE_ID`
-- `GET /checkkey/api/api_golike_fb.php?action=complete_job&platform=facebook&APIKey=KEY&job_id=1&device_id_local=DEVICE_ID`
-- `GET /checkkey/api/api_golike_fb.php?action=report_job&platform=facebook&APIKey=KEY&job_id=1&device_id_local=DEVICE_ID`
-- `GET /checkkey/api/api_golike_tiktok.php?action=complete_job&APIKey=KEY&ads_id=ADS&account_id=ACCOUNT&device_id_local=DEVICE_ID`
-- `GET /checkkey/api/announcement.json`
-- `GET /statistics`
-- `GET /Key_Free/?key=HD_xxx`
+APK cũ có hard-coded host `bonshop.42web.io`. Server mới có thể cung cấp đúng các path, nhưng một APK đã đóng gói URL cũ vẫn sẽ gọi host cũ. Muốn APK gọi Render phải đổi base URL trong APK và build lại, hoặc dùng cơ chế chuyển hướng DNS/domain phù hợp.
 
-Ngoài ra có:
-- `POST /api/check-key.php` với `X-API-Key`
-- Admin: `/admin`
-- Admin API: `/admin/api/*`
+## Lưu ý về bảo mật
 
-## 3. Dữ liệu
-
-Tất cả dữ liệu nằm trong `data/*.json`, không cần MySQL.
-
-Không lưu password thật hoặc API secret trong file public. Dùng biến môi trường.
-
-## 4. Tạo key
-
-Mở `/admin`, nhập `ADMIN_KEY`, rồi tạo key.
-
-Hoặc API:
-
-```http
-POST /admin/api/keys
-X-Admin-Key: YOUR_ADMIN_KEY
-Content-Type: application/json
-
-{"duration_hours":24,"price":2000,"device_limit":1}
-```
-
-## 5. Thêm job
-
-Facebook:
-
-```http
-POST /admin/api/jobs/facebook
-X-Admin-Key: YOUR_ADMIN_KEY
-Content-Type: application/json
-
-{"link":"https://facebook.com/...","object_id":"123","type":"like","reaction":"like","price":35}
-```
-
-TikTok:
-
-```http
-POST /admin/api/jobs/tiktok
-X-Admin-Key: YOUR_ADMIN_KEY
-Content-Type: application/json
-
-{"video_url":"https://www.tiktok.com/...","ads_id":"ADS123","account_id":"ACC123","price":20}
-```
-
-## 6. Đưa server lên Render
-
-1. Upload project lên GitHub.
-2. Render → New Web Service.
-3. Build command: `npm install`
-4. Start command: `npm start`
-5. Node 18+.
-6. Đặt các Environment Variables trong `.env.example`.
-7. Sau khi deploy, server sẽ có dạng:
-   `https://your-service.onrender.com`
-
-### Lưu ý quan trọng về JSON trên Render
-
-Nếu dùng filesystem mặc định của Render, dữ liệu JSON có thể mất khi service được redeploy/restart. Với dữ liệu key/xu quan trọng, nên dùng persistent disk hoặc chuyển sang database sau.
-
-## 7. Đổi URL trong app
-
-Server hiện tại không thể tự đổi URL hard-code trong APK.
-
-Nếu APK đang gọi:
-`https://bonshop.onrender.com/...`
-
-thì cần:
-- deploy server đúng domain đó, hoặc
-- sửa base URL trong app rồi build lại.
-
-Server này đã giữ các path `/checkkey/...`, `/statistics`, `/Key_Free/` để giảm thay đổi phía app.
-
-## 8. Bảo mật
-
-Không dùng các key/mật khẩu cũ đã từng để trong source công khai. Hãy đổi `ADMIN_KEY`, `API_SECRET` và mật khẩu admin trước khi chạy thật.
-
-## Web UI
-
-- `/` — BON main interface
-- `/admin` — Admin login and panel
-- Existing `/checkkey/api/*` and `/statistics` API routes are preserved.
-- Render Dockerfile: `./Dockerfile`
-- Docker build context: `.`
+Không đưa password database, API secret, admin password hoặc private key vào repository. Giá trị legacy có trong source PHP được coi là đã lộ và nên được thay mới trên Render.
