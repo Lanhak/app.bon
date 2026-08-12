@@ -1,0 +1,12 @@
+{
+  "name": "BON SHOP",
+  "version": "1.0.0",
+  "prices": {
+    "24": 2000,
+    "720": 50000,
+    "2160": 120000
+  },
+  "withdraw_min": 10000,
+  "free_key_prefix": "HD_",
+  "default_device_limit": 1
+}
