@@ -27,9 +27,15 @@ const pool=new Pool({
  ssl: process.env.DATABASE_URL && !/localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL) ? {rejectUnauthorized:false}:false,
  max:5,
  idleTimeoutMillis:30000,
- connectionTimeoutMillis:10000
+ connectionTimeoutMillis:60000
 });
 
+function dbSafeInfo(){
+  try{
+    const u=new URL(process.env.DATABASE_URL||'');
+    return {host:u.hostname,port:u.port||'5432',database:u.pathname.replace(/^\//,'')};
+  }catch{return {host:'invalid-or-missing',port:'',database:''}}
+}
 function send(res,obj,code=200){return res.status(code).json(obj)}
 function h(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function money(x){return Number(x||0).toLocaleString('vi-VN')+' đ'}
@@ -57,6 +63,21 @@ function requireAdmin(req,res,next){const u=auth(req);if(!u||u.role!=='admin')re
 const MIGRATION="CREATE TABLE IF NOT EXISTS users (\n id BIGSERIAL PRIMARY KEY,\n username VARCHAR(50) UNIQUE,\n email VARCHAR(190) NOT NULL UNIQUE,\n password_hash VARCHAR(255) NOT NULL,\n role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK(role IN ('user','admin')),\n balance BIGINT NOT NULL DEFAULT 0 CHECK(balance >= 0),\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE TABLE IF NOT EXISTS vip_keys (\n id BIGSERIAL PRIMARY KEY,\n key_value VARCHAR(80) NOT NULL UNIQUE,\n duration_hours INTEGER NOT NULL,\n price BIGINT NOT NULL DEFAULT 0,\n expires_at TIMESTAMPTZ,\n device_limit INTEGER NOT NULL DEFAULT 1,\n status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled','expired')),\n user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,\n note VARCHAR(255),\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE INDEX IF NOT EXISTS idx_vip_user ON vip_keys(user_id);\nCREATE TABLE IF NOT EXISTS key_devices (\n id BIGSERIAL PRIMARY KEY,\n key_id BIGINT NOT NULL REFERENCES vip_keys(id) ON DELETE CASCADE,\n device_hash CHAR(64) NOT NULL,\n first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n UNIQUE(key_id, device_hash)\n);\nCREATE TABLE IF NOT EXISTS balance_transactions (\n id BIGSERIAL PRIMARY KEY,\n user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n amount BIGINT NOT NULL,\n balance_after BIGINT NOT NULL,\n type VARCHAR(40) NOT NULL,\n description VARCHAR(255),\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE INDEX IF NOT EXISTS idx_tx_user ON balance_transactions(user_id);\nCREATE TABLE IF NOT EXISTS wallet_requests (\n id BIGSERIAL PRIMARY KEY,\n user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n request_type VARCHAR(20) NOT NULL CHECK(request_type IN ('deposit','withdraw')),\n amount BIGINT NOT NULL CHECK(amount > 0),\n bank_name VARCHAR(100) NOT NULL,\n account_number VARCHAR(50),\n account_name VARCHAR(190),\n note VARCHAR(255),\n status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),\n admin_note VARCHAR(255),\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n processed_at TIMESTAMPTZ\n);\nCREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_requests(user_id);\nCREATE INDEX IF NOT EXISTS idx_wallet_status ON wallet_requests(status);\nCREATE TABLE IF NOT EXISTS fb_jobs (\n id BIGSERIAL PRIMARY KEY,\n link VARCHAR(255) NOT NULL,\n object_id VARCHAR(100) NOT NULL,\n type VARCHAR(20) NOT NULL DEFAULT 'like',\n reaction VARCHAR(20) NOT NULL DEFAULT 'like',\n price INTEGER NOT NULL DEFAULT 35,\n max_uses INTEGER NOT NULL DEFAULT 9999,\n used_count INTEGER NOT NULL DEFAULT 0,\n status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE TABLE IF NOT EXISTS tiktok_jobs (\n id BIGSERIAL PRIMARY KEY,\n video_url VARCHAR(255) NOT NULL,\n ads_id VARCHAR(100) NOT NULL,\n account_id VARCHAR(100) NOT NULL,\n price INTEGER NOT NULL DEFAULT 20,\n max_uses INTEGER NOT NULL DEFAULT 9999,\n used_count INTEGER NOT NULL DEFAULT 0,\n status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')),\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE TABLE IF NOT EXISTS job_completions (\n id BIGSERIAL PRIMARY KEY,\n platform VARCHAR(20) NOT NULL,\n job_id BIGINT NOT NULL,\n device_hash CHAR(64) NOT NULL,\n user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,\n amount INTEGER NOT NULL DEFAULT 0,\n status VARCHAR(20) NOT NULL DEFAULT 'done',\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n UNIQUE(platform, job_id, device_hash)\n);\nCREATE TABLE IF NOT EXISTS job_reports (\n id BIGSERIAL PRIMARY KEY,\n platform VARCHAR(20) NOT NULL,\n job_id BIGINT NOT NULL,\n uid VARCHAR(100),\n device_hash CHAR(64) NOT NULL,\n description VARCHAR(255),\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE TABLE IF NOT EXISTS app_credits (\n id BIGSERIAL PRIMARY KEY,\n user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n device_hash CHAR(64) NOT NULL,\n name_tool VARCHAR(50) NOT NULL DEFAULT '',\n amount INTEGER NOT NULL DEFAULT 0,\n created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n);\nCREATE INDEX IF NOT EXISTS idx_credits_device_time ON app_credits(device_hash,created_at);\nCREATE INDEX IF NOT EXISTS idx_credits_user ON app_credits(user_id);\n";
 async function migrate(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
+ // Render Postgres can take several seconds to accept connections after deploy/wake.
+ // Retry the initial schema connection instead of terminating the web service.
+ let lastErr;
+ for(let attempt=1;attempt<=6;attempt++){
+   try{
+     await pool.query('SELECT 1');
+     lastErr=null;
+     break;
+   }catch(err){
+     lastErr=err;
+     console.warn(`Database connection attempt ${attempt}/6 failed: ${err.message}`);
+     if(attempt<6) await new Promise(r=>setTimeout(r, Math.min(5000*attempt,20000)));
+   }
+ }
+ if(lastErr) throw lastErr;
  await pool.query(MIGRATION);
  // Additive compatibility migration for BON databases created by older builds.
  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()");
@@ -118,6 +139,7 @@ async function keyLookup(key,deviceId){
  return {key:k,device_count:count};
 }
 
+app.get('/health',(req,res)=>send(res,{ok:true,service:'bon-shop',database:dbSafeInfo()}));
 app.get('/health',async(req,res)=>{try{const q=await pool.query('SELECT NOW() AS now');send(res,{ok:true,status:'online',service:'BON SHOP',time:q.rows[0].now})}catch(e){send(res,{ok:false,status:'database_error',message:e.message},503)}});
 
 app.get('/api',(_,res)=>send(res,{name:'BON SHOP API',version:'3.0.0',endpoint:'POST /api/check-key.php'}));
