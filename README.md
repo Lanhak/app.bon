@@ -114,17 +114,3 @@ Server này đã giữ các path `/checkkey/...`, `/statistics`, `/Key_Free/` đ
 ## 8. Bảo mật
 
 Không dùng các key/mật khẩu cũ đã từng để trong source công khai. Hãy đổi `ADMIN_KEY`, `API_SECRET` và mật khẩu admin trước khi chạy thật.
-
-
-## Admin login
-
-Trang `/admin` dùng Email + Password.
-
-Render Environment Variables:
-
-- `ADMIN_EMAIL` — email đăng nhập
-- `ADMIN_PASSWORD` — mật khẩu đăng nhập
-- `ADMIN_KEY` — secret nội bộ để ký token, không nhập vào trang đăng nhập
-- `API_SECRET` — secret cho API
-
-Sau khi đăng nhập, server cấp token phiên có thời hạn 24 giờ.

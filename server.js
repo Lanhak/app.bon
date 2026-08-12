@@ -2,31 +2,6 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-function b64url(v) {
-  return Buffer.from(v).toString("base64url");
-}
-function makeAdminToken() {
-  const payload = b64url(JSON.stringify({role:"admin", iat:Date.now()}));
-  const secret = process.env.ADMIN_KEY || "change-this-admin-key";
-  const sig = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
-  return payload + "." + sig;
-}
-function verifyAdminToken(token) {
-  try {
-    const parts = String(token || "").split(".");
-    if (parts.length !== 2) return false;
-    const [payload, signature] = parts;
-    const secret = process.env.ADMIN_KEY || "change-this-admin-key";
-    const expected = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
-    if (signature.length !== expected.length) return false;
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return false;
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return data.role === "admin" && Date.now() - Number(data.iat) < 86400000;
-  } catch (_) {
-    return false;
-  }
-}
-
 
 const app = express();
 app.use(express.json({limit: "256kb"}));
@@ -57,11 +32,6 @@ function cfg() {
   return read("config.json", {});
 }
 function adminOk(req) {
-  const auth = req.get("Authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (verifyAdminToken(token)) return true;
-
-  // Backward-compatible internal access using ADMIN_KEY.
   const supplied = req.get("X-Admin-Key") || req.query.admin_key ||
                    (req.body && req.body.admin_key) || "";
   const expected = process.env.ADMIN_KEY || "change-this-admin-key";
@@ -313,25 +283,6 @@ app.get("/statistics",(req,res)=>{
   <div class="card">Thiết bị kích hoạt<div class="n">${devices.length}</div></div><div class="card">Tổng xu đã chi trả<div class="n">${earned.toLocaleString("vi-VN")}</div></div>
   <div class="card">Facebook jobs<div class="n">${completions.filter(x=>x.platform==="facebook").length}</div></div>
   <div class="card">TikTok jobs<div class="n">${completions.filter(x=>x.platform==="tiktok").length}</div></div></div></div></html>`);
-});
-
-/* Admin login */
-app.post("/admin/api/login",(req,res)=>{
-  const email=String((req.body||{}).email||"").trim().toLowerCase();
-  const password=String((req.body||{}).password||"");
-  const expectedEmail=String(process.env.ADMIN_EMAIL||"admin@example.com").trim().toLowerCase();
-  const expectedPassword=String(process.env.ADMIN_PASSWORD||"change-this-password");
-  if(!email || !password || email!==expectedEmail || password!==expectedPassword)
-    return json(res,{success:false,message:"Email hoặc mật khẩu không đúng"},401);
-  const token=makeAdminToken();
-  return json(res,{success:true,message:"Đăng nhập thành công",token,expires_in:86400});
-});
-app.get("/admin/api/me",(req,res)=>{
-  if(!adminOk(req)) return json(res,{success:false,message:"Unauthorized"},401);
-  return json(res,{success:true,role:"admin"});
-});
-app.post("/admin/api/logout",(req,res)=>{
-  return json(res,{success:true,message:"Đã đăng xuất"});
 });
 
 /* Admin API: key/job/announcement management */
