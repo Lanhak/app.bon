@@ -1,16 +1,18 @@
 {
   "name": "bon-server-render",
-  "version": "3.0.0",
-  "description": "BON SHOP server migrated from supplied BON_TOOL APK and PHP source to Node.js/PostgreSQL for GitHub + Render",
+  "version": "4.0.0",
+  "private": true,
+  "description": "BON SHOP server for Render + PostgreSQL, compatible with BON_TOOL APK API contracts",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "check": "node --check server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "express": "^4.21.2",
     "pg": "^8.16.3"
   }
