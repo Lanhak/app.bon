@@ -38,3 +38,6 @@ A server-side redirect cannot rewrite a hard-coded URL inside an APK.
 
 The old PHP `config.php` contained database/admin/API credentials. They are NOT
 copied into this project. Rotate those old credentials.
+
+## Render redirect-loop fix
+`requireAdmin` now redirects unauthenticated requests to `/` instead of `/admin`, preventing an `/admin -> /admin` redirect loop when a stale/invalid cookie is present. The service does not perform HTTP/HTTPS redirects; Render terminates TLS at its proxy.
