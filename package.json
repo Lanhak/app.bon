@@ -1,19 +1,13 @@
 {
-  "name": "bon-server-render",
-  "version": "4.0.0",
+  "name": "bon-shop-onrender-server",
+  "version": "1.0.0",
   "private": true,
-  "description": "BON SHOP server for Render + PostgreSQL, compatible with BON_TOOL APK API contracts",
+  "description": "BON SHOP backend server for onrender.com - implements the full API contract that BON_TOOL app expects (shophuongdev compatible)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "check": "node --check server.js"
+    "start": "node server.js"
   },
   "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "express": "^4.21.2",
-    "pg": "^8.16.3"
+    "node": ">=18"
   }
 }

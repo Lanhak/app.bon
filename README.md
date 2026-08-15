@@ -1,287 +1,65 @@
-# BON_SERVER 4.0.0 — Render + PostgreSQL
-
-Server được viết lại từ **web_BON_TOOL.ZIP** và kiểm tra API contract trong **BON_TOOL.apk**.
-
-Mục tiêu của bản này:
-- Node.js + Express, chạy trực tiếp trên Render.
-- PostgreSQL Render, không còn MySQL/PHP/InfinityFree.
-- Server **mở port trước khi chờ database**, nên database timeout không làm Render báo "No open ports".
-- Migration tự động, đặc biệt sửa lỗi cũ `column "updated_at" of relation "users" does not exist`.
-- Giữ các đường dẫn API mà BON_TOOL đang sử dụng.
-- Có giao diện user, admin, mua key, nạp/rút, quản lý key, quản lý job Facebook/TikTok và thống kê.
-
-## 1. Quan trọng: DATABASE_URL
-
-Không đưa password database vào GitHub.
-
-Trong Render:
-1. Mở Web Service `bonshop`.
-2. Vào **Environment**.
-3. Thêm `DATABASE_URL`.
-4. Chọn **Internal Database URL** của database `bon-db` nếu Web Service và PostgreSQL ở cùng region/workspace.
-5. Database và Web Service nên ở cùng region (trường hợp của bạn là Virginia).
-
-Nếu dùng URL ngoài Render, dùng **External Database URL** từ nút Connect của PostgreSQL.
-
-Bản server này mặc định bật TLS (`PGSSL=true`). Nếu URL/internal connection của bạn không dùng TLS và log báo lỗi TLS, đặt:
-`PGSSL=false`
-
-## 2. Environment Variables
-
-Thiết lập:
-
-```text
-DATABASE_URL=<Internal Database URL của bon-db>
-ADMIN_EMAIL=akklanh84@gmail.com
-ADMIN_PASSWORD=<mật khẩu admin của bạn>
-SESSION_SECRET=<chuỗi bí mật dài>
-KEYADMIN_SECRET=huongdev8386
-API_SECRET=<chuỗi bí mật dài>
-PUBLIC_URL=https://bonshop.onrender.com
-PGSSL=true
-```
-
-`PORT` không cần tự đặt; Render tự cung cấp và server dùng `process.env.PORT`, mặc định 10000.
-
-## 3. Deploy GitHub + Render
-
-### GitHub
-Giải nén ZIP rồi upload toàn bộ nội dung lên repository.
-
-Không upload:
-- `.env` thật
-- password PostgreSQL
-- secret thật
-
-### Render
-Có thể dùng Dockerfile có sẵn:
-- Runtime: Docker
-- Health Check: `/health`
-- Dockerfile: `./Dockerfile`
-
-Dockerfile dùng:
-`npm install --omit=dev --no-audit --no-fund`
-
-Không dùng `npm ci`, vì project không bắt buộc package-lock.
-
-## 4. Admin
-
-Sau khi database kết nối thành công, server tự tạo/cập nhật user admin theo:
-- `ADMIN_EMAIL`
-- `ADMIN_PASSWORD`
-
-Đăng nhập:
-`https://bonshop.onrender.com/admin`
-
-Nếu đổi mật khẩu trong Render Environment thì deploy/restart lại service.
-
-## 5. API tương thích BON_TOOL
-
-### Key VIP
-
-`GET/POST /checkkey/api/key.php`
-
-Hỗ trợ:
-- `APIKey`
-- `api_key`
-- `key`
-- `device_id`
-
-Response thành công có:
-- `success: true`
-- `status: "success"`
-- `key`
-- `api_key`
-- `expires_at`
-- `endDate`
-- `end_date`
-- `create_date`
-- `device_ID`
-- `device_id`
-- `device_count`
-- `device_limit`
-
-### Kiểm tra hạn key
-
-`GET/POST /checkkey/api/check_date_key.php`
-
-Hỗ trợ:
-- `APIKey`
-- `device_id_local`
-- `device_id`
-
-### Add History / cộng xu
-
-`POST /checkkey/`
-
-Body JSON:
-
-```json
-{
-  "action": "addHistory",
-  "name_tool": "GOLIKE",
-  "keyadmin": "huongdev8386",
-  "device_id": "<device id>",
-  "money": 35
-}
-```
-
-Server kiểm tra thiết bị đã bind với key VIP, kiểm tra hạn key, giới hạn 60 lần/giờ/thiết bị, rồi cộng xu vào user.
-
-### Facebook GoLike
-
-`GET /checkkey/api/api_golike_fb.php`
-
-Actions:
-- `get_jobs`
-- `complete_job`
-- `report_job`
-
-Giữ response dạng:
-`{success,data:{id,job_id,link,type,reaction,object_id,price_per_after_cost,fix_coin,coin}}`
-
-### TikTok GoLike
-
-`GET /checkkey/api/api_golike_tiktok.php`
-
-Action:
-- `complete_job`
-
-Giữ response:
-`success`, `message`, `data.ads_id`, `data.account_id`, `data.fix_coin`.
-
-### API check-key
-
-`POST /api/check-key.php`
-
-Header:
-`X-API-Key: <API_SECRET>`
-
-Body:
-```json
-{
-  "key": "VIP-...",
-  "device_hash": "<sha256 64 hex>"
-}
-```
-
-### Announcement
-
-`GET /checkkey/api/announcement.json`
-
-### Health
-
-`GET /health`
-
-Ví dụ:
-```json
-{
-  "ok": true,
-  "service": "bon-shop",
-  "database": "ready"
-}
-```
-
-## 6. Database
-
-Các bảng chính:
-- users
-- vip_keys
-- key_devices
-- balance_transactions
-- wallet_requests
-- fb_jobs
-- tiktok_jobs
-- job_completions
-- job_reports
-- app_credits
-
-Server tự chạy migration khi khởi động.
-
-Nếu database cũ đã có bảng `users` nhưng thiếu `updated_at`, server dùng:
-
-```sql
-ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-```
-
-Đây chính là lỗi làm bản 3.0.0 trước đó crash.
-
-## 7. Vì sao bản trước bị 502 / timeout
-
-Có hai lỗi riêng:
-
-### Lỗi 1
-`column "updated_at" of relation "users" does not exist`
-
-Do schema PostgreSQL cũ không có cột `updated_at`.
-
-Bản này tự bổ sung cột.
-
-### Lỗi 2
-`Connection terminated due to connection timeout`
-
-Bản cũ đợi PostgreSQL ngay trong startup rồi mới `listen()`, khiến Render không thấy port 10000 và báo:
-
-`No open ports detected`
-
-Bản này:
-1. `listen(0.0.0.0:PORT)` ngay.
-2. Render thấy port.
-3. Database được kết nối/migrate ở background.
-4. Nếu database đang Creating/đang timeout, server vẫn sống.
-5. Server retry kết nối nhiều lần.
-6. API trả `503 Database chưa sẵn sàng` thay vì làm process chết.
-
-Nếu retry mãi:
-- kiểm tra Web Service và Postgres cùng region.
-- ưu tiên Internal Database URL.
-- kiểm tra DATABASE_URL không bị copy thiếu host/port/database.
-- kiểm tra PostgreSQL đã `Available/Running`.
-
-## 8. Kiểm tra bằng Termux
+# BON SHOP - onrender.com server
+
+Server Node (không dependency) tự triển khai đầy đủ API mà app **BON_TOOL vD (onrender)** gọi,
+đúng format giống `shophuongdev.com`.
+
+## Cách deploy lên onrender.com
+
+1. Tạo repo GitHub chứa 2 file: `server.js` và `package.json` (đã có sẵn trong thư mục này).
+2. Vào [onrender.com](https://onrender.com) → **New → Web Service** → chọn repo đó.
+3. Cấu hình:
+   - **Runtime**: `Node`
+   - **Build Command**: để trống (không cần cài dep)
+   - **Start Command**: `node server.js`
+   - **Instance Type**: Free
+4. Deploy. Server sẽ chạy tại `https://bonshop.onrender.com` (hoặc tên bạn đặt).
+5. (Tùy chọn) Thêm Env Variables nếu muốn đổi cấu hình:
+   - `ADMIN_SECRET` — mật khẩu admin API (mặc định: `35c9ef14-46d1-416e-aa7c-a6df43fcc013`)
+   - `BASE_URL` — URL gốc (mặc định `https://bonshop.onrender.com`)
+   - `DATA_FILE` — đường dẫn lưu dữ liệu (mặc định `./data.json`; lưu ý Render free không giữ file giữa các lần restart)
+
+> Ghi chú: Render free instance có ổ đĩa tạm — mọi thay đổi dữ liệu (key tạo mới, job, lịch sử)
+sẽ mất khi service restart. Để lưu lâu dài, gắn **Persistent Disk** hoặc seed qua Env Variable.
+
+## Các endpoint app gọi
+
+| Endpoint | Mô tả |
+|---|---|
+| `GET /checkkey/api/key.php?APIKey=` | Kiểm tra key khi kích hoạt (trả `status`/`end_date`/`device_ID`) |
+| `GET /checkkey/api/check_date_key.php?APIKey=&device_id_local=` | Kiểm tra + gán thiết bị |
+| `GET /checkkey/api/announcement.json` | Thông báo app |
+| `GET /checkkey/api/api_golike_fb.php?action=get_jobs\|complete_job\|report_job` | Job Facebook |
+| `GET /checkkey/api/api_golike_tiktok.php?action=complete_job` | Job TikTok |
+| `POST /checkkey/` | Lịch sử `addHistory` |
+| `GET /statistics` | Trang thống kê |
+| `GET /Key_Free/?key=` | Trang kiểm tra key |
+
+## Admin API (header `X-BON-SECRET: <ADMIN_SECRET>`)
+
+- `GET /v1/admin/summary`
+- `GET /v1/admin/keys` — danh sách key
+- `POST /v1/admin/keys/create` — body `{key, hours, price, note}`
+- `POST /v1/admin/keys/action` — body `{key, action: enable|disable|reset|delete}`
+- `GET /v1/admin/jobs`
+- `POST /v1/admin/jobs/create` — body `{platform: fb|tiktok, link, object_id, type, reaction, fix_coin, price, max_uses}`
+- `POST /v1/admin/jobs/action` — body `{platform, id, action}`
+- `GET /v1/admin/history`
+
+## Seed key mặc định
+
+Server seed sẵn các key đang hoạt động trên worker D1:
+`VIP-57FD76456B2342CDB393` (hạn 2026-08-16 12:58), `VIP-40FD7A1557884EF6B0BE`
+(backup test vD, thiết bị TESTNOW), `VIP-561318E0620B413DA84A` (hạn 2026-08-16 09:00).
+
+## Test cục bộ
 
 ```bash
-curl -i https://bonshop.onrender.com/health
-curl -i https://bonshop.onrender.com/api
-curl -i https://bonshop.onrender.com/statistics
+node server.js
+# rồi gọi
+curl "http://localhost:3000/checkkey/api/key.php?APIKey=VIP-57FD76456B2342CDB393"
 ```
 
-Khi database ready:
+## APK tương ứng
 
-```bash
-curl -s https://bonshop.onrender.com/health
-```
-
-phải có:
-
-```json
-"database":"ready"
-```
-
-## 9. Lưu ý về BON_TOOL.apk
-
-APK bạn gửi đang chứa endpoint cũ `bonshop.42web.io` trong string/resources. Server Render này cung cấp **cùng path/API contract**, nhưng nếu APK vẫn gọi cứng `https://bonshop.42web.io`, nó sẽ không tự chuyển sang Render.
-
-Muốn APK gọi server mới thì APK phải được build/sửa URL base thành:
-
-`https://bonshop.onrender.com`
-
-Các path giữ nguyên:
-- `/checkkey/`
-- `/checkkey/api/key.php`
-- `/checkkey/api/check_date_key.php`
-- `/checkkey/api/api_golike_fb.php`
-- `/checkkey/api/api_golike_tiktok.php`
-- `/checkkey/api/announcement.json`
-
-## 10. Security
-
-Không commit:
-- `DATABASE_URL`
-- mật khẩu admin
-- API secret
-
-Render khuyến nghị dùng Environment Variables/Secrets cho connection strings và API keys.
-
-`KEYADMIN_SECRET` đang giữ giá trị cũ để tương thích với APK hiện tại. Nếu sau này sửa APK, nên đổi secret này.
-
+`out/BON_TOOL_vD_onrender_final.apk` — đã đổi toàn bộ URL `bonshop.42web.io` → `bonshop.onrender.com`,
+ký lại (v1+v2+v3) bằng keystore mới `bon_final.keystore` (pass `bon2026`, alias `BONTOOL`).
