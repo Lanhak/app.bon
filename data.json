@@ -1,0 +1,132 @@
+{
+  "keys": [
+    {
+      "id": 8,
+      "key_value": "VIP-57FD76456B2342CDB393",
+      "user_id": 2,
+      "price": 2000,
+      "hours": 24,
+      "status": "active",
+      "device_limit": 1,
+      "note": "",
+      "created_at": "2026-08-15 12:58:20",
+      "expires_at": "2026-08-16 12:58:20",
+      "device_id": "",
+      "device_count": 0
+    },
+    {
+      "id": 5,
+      "key_value": "VIP-40FD7A1557884EF6B0BE",
+      "user_id": null,
+      "price": 0,
+      "hours": 72,
+      "status": "active",
+      "device_limit": 1,
+      "note": "backup test vD",
+      "created_at": "2026-08-15 11:11:54",
+      "expires_at": "2026-08-18 11:11:54",
+      "device_id": "TESTNOW",
+      "device_count": 1
+    },
+    {
+      "id": 3,
+      "key_value": "VIP-561318E0620B413DA84A",
+      "user_id": 2,
+      "price": 2000,
+      "hours": 24,
+      "status": "active",
+      "device_limit": 1,
+      "note": "",
+      "created_at": "2026-08-15 09:00:03",
+      "expires_at": "2026-08-16 09:00:03",
+      "device_id": "",
+      "device_count": 0
+    },
+    {
+      "id": 2,
+      "key_value": "VIP-0ED943CC14FD48B1AB42",
+      "user_id": 2,
+      "price": 2000,
+      "hours": 24,
+      "status": "active",
+      "device_limit": 1,
+      "note": "",
+      "created_at": "2026-08-14 13:04:10",
+      "expires_at": "2026-08-15 13:04:10",
+      "device_id": "TESTNOW",
+      "device_count": 1
+    },
+    {
+      "id": 1,
+      "key_value": "VIP-TEST-001",
+      "user_id": null,
+      "price": 0,
+      "hours": 24,
+      "status": "active",
+      "device_limit": 1,
+      "note": "",
+      "created_at": "2026-08-14 05:38:39",
+      "expires_at": "2026-08-15 05:38:39",
+      "device_id": "",
+      "device_count": 0
+    }
+  ],
+  "users": [
+    {
+      "id": 1,
+      "username": "testuser01",
+      "email": "testuser01@gmail.com",
+      "role": "user",
+      "balance": 0,
+      "password_hash": "988a32d97a9a32eccc86dfe155c8781b:a12d66e740868fdbaa6f61616fb094c57e7196e03f1da52bf74f20e36967a1c3",
+      "created_at": "2026-08-14 05:30:00"
+    },
+    {
+      "id": 2,
+      "username": "lanhak",
+      "email": "trangak2k71@gmail.com",
+      "role": "user",
+      "balance": 94000,
+      "password_hash": "730c6316ffbe8328fb45923f3a24aed6:59e6ac67d9b63e7648c661deeb0ebad9fdf6d48d1ef813a8c4ce5d60bf31ddda",
+      "created_at": "2026-08-14 05:35:00"
+    },
+    {
+      "id": 3,
+      "username": "akklanh84",
+      "email": "akklanh84@gmail.com",
+      "role": "admin",
+      "balance": 0,
+      "password_hash": "fd7dedb0fda9d9a57f575416da665a0c:8b66c616395041922489a57b3d21d253633f921a0e1e269c0769b9d55ede28f5",
+      "created_at": "2026-08-14 05:40:00"
+    }
+  ],
+  "fb_jobs": [],
+  "tiktok_jobs": [],
+  "history": [],
+  "wallet_requests": [],
+  "transactions": [],
+  "devices": [],
+  "completions": [],
+  "reports": [],
+  "credits": [],
+  "announcement": {
+    "status": "success",
+    "is_show": true,
+    "id": "BON_NEWS_2026_08_15",
+    "title": "🎉 THÔNG BÁO",
+    "message": "Chào mừng bạn đến với BON SHOP! Hãy nhập Key VIP để sử dụng công cụ một cách mượt mà nhé.",
+    "download_url": "",
+    "force_update": false,
+    "version_code": 10,
+    "version_name": "10.0"
+  },
+  "key_seq": 100,
+  "job_seq": 100,
+  "user_seq": 100,
+  "wallet_seq": 100,
+  "tx_seq": 100,
+  "device_seq": 100,
+  "completion_seq": 100,
+  "report_seq": 100,
+  "credit_seq": 100
+}
