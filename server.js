@@ -150,16 +150,110 @@ function loadState() {
   return freshState();
 }
 
-const state = loadState();
+// ---- Lưu dữ liệu lâu dài bằng PostgreSQL (Neon SQL over HTTP, không cần cài thêm dependency) ----
+// Set env DATABASE_URL = connection string Neon (postgresql://...) để dữ liệu không mất khi Render restart.
+// Nếu không có DATABASE_URL, server tự động dùng file data.json (ổ đĩa tạm — dữ liệu sẽ mất khi restart).
+const DATABASE_URL = process.env.DATABASE_URL || '';
+function dbEndpoint(connString) {
+  if (!connString) return '';
+  let rest = String(connString).replace(/^[a-z]+:\/\//i, '');
+  const at = rest.lastIndexOf('@');
+  if (at === -1) return '';
+  rest = rest.slice(at + 1);
+  const slash = rest.indexOf('/');
+  if (slash !== -1) rest = rest.slice(0, slash);
+  return 'https://' + rest;
+}
+const DB_HOST = dbEndpoint(DATABASE_URL);
+let dbReady = false;
+let dbRetryTimer = null;
+let dbQueue = Promise.resolve();
+
+async function dbQuery(query, params) {
+  const res = await fetch(DB_HOST + '/sql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Neon-Connection-String': DATABASE_URL
+    },
+    body: JSON.stringify({ query: query, params: params || [] })
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    const detail = (data.error && (data.error.message || JSON.stringify(data.error))) || JSON.stringify(data);
+    throw new Error('Postgres: ' + detail);
+  }
+  return data;
+}
+
+async function dbEnsureTable() {
+  await dbQuery('CREATE TABLE IF NOT EXISTS bon_state (id INTEGER PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())');
+}
+
+async function dbLoad() {
+  const r = await dbQuery('SELECT data FROM bon_state WHERE id = 1');
+  if (r.rows && r.rows.length && r.rows[0] && r.rows[0].data) return r.rows[0].data;
+  return null;
+}
+
+async function dbSave() {
+  await dbQuery(
+    'INSERT INTO bon_state (id, data, updated_at) VALUES (1, $1::jsonb, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()',
+    [JSON.stringify(state)]
+  );
+}
+
+async function initDatabase() {
+  await dbEnsureTable();
+  const loaded = await dbLoad();
+  if (loaded && Array.isArray(loaded.keys) && !localDirty) {
+    state = migrateState(loaded);
+  } else {
+    await dbSave();
+    localDirty = false;
+  }
+  dbReady = true;
+}
+
+function startDatabaseRetry() {
+  if (dbRetryTimer || !DB_HOST) return;
+  dbRetryTimer = setInterval(() => {
+    initDatabase()
+      .then(() => {
+        clearInterval(dbRetryTimer);
+        dbRetryTimer = null;
+        console.log('PostgreSQL đã kết nối — dữ liệu đã đồng bộ.');
+      })
+      .catch(() => {});
+  }, 30000);
+}
+
+let state = loadState();
+let localDirty = false;
 let saveTimer = null;
+
+function flushFile() {
+  try {
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+  } catch (e) {}
+}
+
 function save() {
+  localDirty = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try {
-      fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-      fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
-    } catch (e) {}
-  }, 200);
+    flushFile();
+    if (DB_HOST && dbReady) {
+      dbQueue = dbQueue
+        .then(() => dbSave())
+        .catch((e) => {
+          console.error('Lưu PostgreSQL lỗi (chuyển về file tạm):', e.message);
+          dbReady = false;
+          startDatabaseRetry();
+        });
+    }
+  }, 400);
 }
 
 function json(res, obj, status) {
@@ -1212,37 +1306,35 @@ ${SCRIPTS}</body></html>`;
 }
 
 function statisticsPage() {
-  const activeKeys = state.keys.filter((k) => k.status === 'active' && (!k.expires_at || k.expires_at >= nowStr()));
-  const devices = state.devices.length;
-  const earned = state.transactions.filter((t) => t.amount > 0).reduce((a, t) => a + t.amount, 0);
-  const fbDone = state.completions.filter((c) => c.platform === 'facebook').length;
-  const ttDone = state.completions.filter((c) => c.platform === 'tiktok').length;
-  const recent = state.completions.slice().sort((a, b) => b.id - a.id).slice(0, 12).map((c) => {
-    const owner = findUserById(c.user_id);
-    return `<tr><td>${esc(String(c.platform).toUpperCase())}</td><td><b style="color:#66e3ff">+${c.amount}</b></td><td>${esc(owner ? owner.username || owner.email : '-')}</td><td>${esc(c.created_at)}</td></tr>`;
-  }).join('');
+  const platformLabels = [
+    { key: 'facebook', label: 'Facebook' },
+    { key: 'tiktok', label: 'TikTok' }
+  ];
+  const counts = { facebook: 0, tiktok: 0 };
+  for (const c of state.completions) {
+    if (!c || c.status !== 'done') continue;
+    const p = c.platform === 'tiktok' ? 'tiktok' : 'facebook';
+    counts[p] = (counts[p] || 0) + 1;
+  }
+  const rows = platformLabels
+    .map((p) => `<tr><td><b style="color:#66e3ff">${esc(p.label)}</b></td><td>${Number(counts[p.key]) || 0}</td></tr>`)
+    .join('');
+  const total = (Number(counts.facebook) || 0) + (Number(counts.tiktok) || 0);
 
-  const fmt = (n) => (Number(n) || 0).toLocaleString('en-US').replace(/,/g, '.');
-
-  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BON SHOP — Thống kê</title>
-<style>*{box-sizing:border-box}body{margin:0;font:15px Arial;background:#070b16;color:#edf2ff;padding:18px}.wrap{max-width:760px;margin:auto}.head{padding:26px;border:1px solid #2a3e68;border-radius:22px;background:linear-gradient(135deg,#111f3a,#0b1426);text-align:center;margin-bottom:16px}.badge{display:inline-block;padding:7px 13px;border:1px solid #3b5fa4;border-radius:99px;color:#8fb5ff;font-size:11px;font-weight:800;letter-spacing:1.5px}h1{margin:14px 0 4px;font-size:28px}p{color:#9eabc0;margin:0;line-height:1.6}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px}.card{padding:18px;border:1px solid #263a5b;border-radius:16px;background:#0d1729}.card span{display:block;color:#8998b0;font-size:12px}.card b{display:block;font-size:26px;margin-top:6px}.card .sub{font-size:12px;color:#66e3ff;margin-top:2px}table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:9px;border-bottom:1px solid #293753;text-align:left;color:#cbd6eb}th{color:#8998b0;font-weight:700}.muted{color:#5d6b86;font-size:12px;text-align:center;margin-top:16px}@media(max-width:520px){.grid{grid-template-columns:1fr}}</style></head><body>
+  return `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BON SHOP — Bảng làm việc</title>
+<style>*{box-sizing:border-box}body{margin:0;font:15px Arial;background:#070b16;color:#edf2ff;padding:18px}.wrap{max-width:560px;margin:auto}.head{padding:22px;border:1px solid #2a3e68;border-radius:22px;background:linear-gradient(135deg,#111f3a,#0b1426);text-align:center;margin-bottom:16px}.badge{display:inline-block;padding:7px 13px;border:1px solid #3b5fa4;border-radius:99px;color:#8fb5ff;font-size:11px;font-weight:800;letter-spacing:1.5px}h1{margin:14px 0 4px;font-size:26px}p{color:#9eabc0;margin:0;line-height:1.6}table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:11px;border-bottom:1px solid #293753;text-align:left;color:#cbd6eb}th{color:#8998b0;font-weight:700;text-align:left}td:last-child,th:last-child{text-align:right;font-weight:700}.muted{color:#5d6b86;font-size:12px;text-align:center;margin-top:16px}</style></head><body>
 <div class="wrap">
   <div class="head">
-    <div class="badge">✦ BON SHOP · THỐNG KÊ</div>
-    <h1>BON SHOP</h1>
-    <p>Hệ thống dịch vụ số · cập nhật theo thời gian thực</p>
+    <div class="badge">✦ BON SHOP · BẢNG LÀM VIỆC</div>
+    <h1>Bảng làm việc</h1>
+    <p>Thống kê số lượng nhiệm vụ đã hoàn thành</p>
   </div>
-  <div class="grid">
-    <div class="card"><span>Người dùng</span><b>${fmt(state.users.length)}</b></div>
-    <div class="card"><span>Key VIP đang hoạt động</span><b>${fmt(activeKeys.length)}<div class="sub">/ tổng ${fmt(state.keys.length)} key</div></b></div>
-    <div class="card"><span>Thiết bị kích hoạt</span><b>${fmt(devices)}</b></div>
-    <div class="card"><span>Tổng xu đã chi trả</span><b>${fmt(earned)}<div class="sub">xu</div></b></div>
-    <div class="card"><span>Nhiệm vụ Facebook</span><b>${fmt(fbDone)}<div class="sub">đã hoàn thành</div></b></div>
-    <div class="card"><span>Nhiệm vụ TikTok</span><b>${fmt(ttDone)}<div class="sub">đã hoàn thành</div></b></div>
-  </div>
-  <div class="card">
-    <h2 style="margin:0 0 12px;font-size:17px">🕒 Hoạt động gần đây</h2>
-    ${recent ? `<table><tr><th>Nền tảng</th><th>Xu</th><th>Người dùng</th><th>Thời gian</th></tr>${recent}</table>` : `<p class="muted">Chưa có hoạt động nào.</p>`}
+  <div class="card" style="border:1px solid #263a5b;border-radius:16px;background:#0d1729;padding:16px">
+    <table>
+      <tr><th>Nhiệm vụ</th><th>Số lượng</th></tr>
+      ${rows || '<tr><td colspan="2" class="muted" style="text-align:center">Chưa có nhiệm vụ nào.</td></tr>'}
+      <tr><td style="font-weight:800;color:#8fb5ff">Tổng</td><td style="font-weight:800;color:#66e3ff">${Number(total) || 0}</td></tr>
+    </table>
   </div>
   <div class="muted">BON SHOP · Đơn giản · Nhanh · Tiện lợi</div>
 </div>
@@ -1273,6 +1365,33 @@ setInterval(() => {
   }
 }, 3600 * 1000);
 
-server.listen(PORT, () => {
-  console.log(`BON SHOP server running on port ${PORT}`);
-});
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+function shutdown() {
+  flushFile();
+  if (DB_HOST && dbReady) {
+    dbSave().finally(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
+}
+
+async function bootstrap() {
+  if (DB_HOST) {
+    try {
+      await initDatabase();
+      console.log('PostgreSQL đã kết nối — dữ liệu sẽ không mất khi restart.');
+    } catch (e) {
+      console.error('Chưa kết nối được PostgreSQL (dùng file tạm, sẽ thử lại sau 30s):', e.message);
+      startDatabaseRetry();
+    }
+  } else {
+    console.log('Chưa cấu hình DATABASE_URL — dữ liệu chỉ lưu ở file tạm, sẽ mất khi restart.');
+  }
+  server.listen(PORT, () => {
+    console.log(`BON SHOP server running on port ${PORT}`);
+  });
+}
+
+bootstrap();
