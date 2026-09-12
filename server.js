@@ -1,8 +1,9 @@
 const http = require('http');
 const fs = require('fs');
-const { Pool } = require('pg');
 const path = require('path');
 const crypto = require('crypto');
+
+
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '35c9ef14-46d1-416e-aa7c-a6df43fcc013';
@@ -151,82 +152,99 @@ function loadState() {
   return freshState();
 }
 
-// ---- PostgreSQL persistent state (native pg; no Neon HTTP API) ----
+// ---- Lưu dữ liệu lâu dài bằng PostgreSQL (Neon SQL over HTTP, không cần cài thêm dependency) ----
+// Set env DATABASE_URL = connection string Neon (postgresql://...) để dữ liệu không mất khi Render restart.
+// Nếu không có DATABASE_URL, server tự động dùng file data.json (ổ đĩa tạm — dữ liệu sẽ mất khi restart).
 const DATABASE_URL = process.env.DATABASE_URL || '';
-if (!DATABASE_URL) {
-  console.error('DATABASE_URL chưa được cấu hình.');
-  process.exit(1);
-}
-
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 10000
-});
-
+const DB_HOST = DATABASE_URL ? new URL(DATABASE_URL).origin : '';
 let dbReady = false;
+let dbRetryTimer = null;
 let dbQueue = Promise.resolve();
 
-async function checkDatabase() {
-  const client = await pool.connect();
-  try {
-    await client.query('SELECT 1');
-    console.log('PostgreSQL đã kết nối — dữ liệu persistent, không dùng data.json.');
-  } finally {
-    client.release();
+async function dbQuery(query, params) {
+  const res = await fetch(DB_HOST + '/sql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Neon-Connection-String': DATABASE_URL
+    },
+    body: JSON.stringify({ query: query, params: params || [] })
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    const detail = (data.error && (data.error.message || JSON.stringify(data.error))) || JSON.stringify(data);
+    throw new Error('Postgres: ' + detail);
   }
+  return data;
+}
+
+async function dbEnsureTable() {
+  await dbQuery('CREATE TABLE IF NOT EXISTS bon_state (id INTEGER PRIMARY KEY, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())');
+}
+
+async function dbLoad() {
+  const r = await dbQuery('SELECT data FROM bon_state WHERE id = 1');
+  if (r.rows && r.rows.length && r.rows[0] && r.rows[0].data) return r.rows[0].data;
+  return null;
+}
+
+async function dbSave() {
+  await dbQuery(
+    'INSERT INTO bon_state (id, data, updated_at) VALUES (1, $1::jsonb, now()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()',
+    [JSON.stringify(state)]
+  );
 }
 
 async function initDatabase() {
-  const client = await pool.connect();
-  try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS bon_state (
-        id INTEGER PRIMARY KEY,
-        state JSONB NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
-
-    const result = await client.query('SELECT state FROM bon_state WHERE id = 1');
-
-    if (result.rows.length === 0) {
-      await client.query(
-        'INSERT INTO bon_state (id, state) VALUES ($1, $2::jsonb)',
-        [1, JSON.stringify(migrateState(freshState()))]
-      );
-      console.log('PostgreSQL chưa có bon_state — đã tạo state ban đầu.');
-    } else {
-      state = migrateState(result.rows[0].state || {});
-      console.log('Đã load state từ PostgreSQL.');
-    }
-
-    dbReady = true;
-  } finally {
-    client.release();
+  await dbEnsureTable();
+  const loaded = await dbLoad();
+  if (loaded && Array.isArray(loaded.keys) && !localDirty) {
+    state = migrateState(loaded);
+  } else {
+    await dbSave();
+    localDirty = false;
   }
+  dbReady = true;
 }
 
-async function saveState(nextState) {
-  await pool.query(`
-    INSERT INTO bon_state (id, state, updated_at)
-    VALUES ($1, $2::jsonb, NOW())
-    ON CONFLICT (id)
-    DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()
-  `, [1, JSON.stringify(nextState)]);
+function startDatabaseRetry() {
+  if (dbRetryTimer || !DB_HOST) return;
+  dbRetryTimer = setInterval(() => {
+    initDatabase()
+      .then(() => {
+        clearInterval(dbRetryTimer);
+        dbRetryTimer = null;
+        console.log('PostgreSQL đã kết nối — dữ liệu đã đồng bộ.');
+      })
+      .catch(() => {});
+  }, 30000);
 }
 
 let state = loadState();
+let localDirty = false;
 let saveTimer = null;
 
+function flushFile() {
+  try {
+    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+  } catch (e) {}
+}
+
 function save() {
+  localDirty = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    dbQueue = dbQueue
-      .then(() => saveState(state))
-      .catch((e) => console.error('Lưu PostgreSQL lỗi:', e.message));
+    flushFile();
+    if (DB_HOST && dbReady) {
+      dbQueue = dbQueue
+        .then(() => dbSave())
+        .catch((e) => {
+          console.error('Lưu PostgreSQL lỗi (chuyển về file tạm):', e.message);
+          dbReady = false;
+          startDatabaseRetry();
+        });
+    }
   }, 400);
 }
 
@@ -1342,30 +1360,30 @@ setInterval(() => {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-async function shutdown() {
-  try {
-    clearTimeout(saveTimer);
-    if (dbReady) await dbQueue.then(() => saveState(state));
-  } catch (e) {
-    console.error('Lưu PostgreSQL khi shutdown lỗi:', e.message);
-  } finally {
-    await pool.end().catch(() => {});
+function shutdown() {
+  flushFile();
+  if (DB_HOST && dbReady) {
+    dbSave().finally(() => process.exit(0));
+  } else {
     process.exit(0);
   }
 }
 
 async function bootstrap() {
-  try {
-    await checkDatabase();
-    await initDatabase();
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`BON SHOP server running on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error('Không thể kết nối PostgreSQL. Server không khởi động.');
-    console.error(error);
-    process.exit(1);
+  if (DB_HOST) {
+    try {
+      await initDatabase();
+      console.log('PostgreSQL đã kết nối — dữ liệu sẽ không mất khi restart.');
+    } catch (e) {
+      console.error('Chưa kết nối được PostgreSQL (dùng file tạm, sẽ thử lại sau 30s):', e.message);
+      startDatabaseRetry();
+    }
+  } else {
+    console.log('Chưa cấu hình DATABASE_URL — dữ liệu chỉ lưu ở file tạm, sẽ mất khi restart.');
   }
+  server.listen(PORT, () => {
+    console.log(`BON SHOP server running on port ${PORT}`);
+  });
 }
 
 bootstrap();
