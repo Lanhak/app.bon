@@ -160,6 +160,7 @@ const DB_HOST = DATABASE_URL ? new URL(DATABASE_URL).origin : '';
 let dbReady = false;
 let dbRetryTimer = null;
 let dbQueue = Promise.resolve();
+let dbInitPromise = null;
 
 async function dbQuery(query, params) {
   const res = await fetch(DB_HOST + '/sql', {
@@ -196,15 +197,28 @@ async function dbSave() {
 }
 
 async function initDatabase() {
-  await dbEnsureTable();
-  const loaded = await dbLoad();
-  if (loaded && Array.isArray(loaded.keys) && !localDirty) {
-    state = migrateState(loaded);
-  } else {
-    await dbSave();
+  if (dbInitPromise) return dbInitPromise;
+  dbInitPromise = (async () => {
+    await dbEnsureTable();
+    const loaded = await dbLoad();
+    if (loaded && Array.isArray(loaded.keys)) {
+      if (!localDirty) {
+        state = migrateState(loaded);
+      } else {
+        state = migrateState(state);
+        await dbSave();
+      }
+    } else {
+      await dbSave();
+    }
+    dbReady = true;
     localDirty = false;
+  })();
+  try {
+    return await dbInitPromise;
+  } finally {
+    dbInitPromise = null;
   }
-  dbReady = true;
 }
 
 function startDatabaseRetry() {
@@ -239,6 +253,7 @@ function save() {
     if (DB_HOST && dbReady) {
       dbQueue = dbQueue
         .then(() => dbSave())
+        .then(() => { localDirty = false; })
         .catch((e) => {
           console.error('Lưu PostgreSQL lỗi (chuyển về file tạm):', e.message);
           dbReady = false;
@@ -246,6 +261,24 @@ function save() {
         });
     }
   }, 400);
+}
+
+function saveNow() {
+  localDirty = true;
+  flushFile();
+  if (!DB_HOST || !dbReady) {
+    if (DB_HOST) startDatabaseRetry();
+    return dbQueue;
+  }
+  dbQueue = dbQueue
+    .then(() => dbSave())
+    .then(() => { localDirty = false; })
+    .catch((e) => {
+      console.error('Lưu PostgreSQL lỗi:', e.message);
+      dbReady = false;
+      startDatabaseRetry();
+    });
+  return dbQueue;
 }
 
 function json(res, obj, status) {
@@ -837,7 +870,7 @@ async function handleWebForm(req, res, q, adminLogin) {
         password_hash: hashPassword(pw),
         created_at: nowStr()
       });
-      save();
+      saveNow();
       flash(s, '\u0110\u0103ng k\u00FD th\u00E0nh c\u00F4ng, h\u00E3y \u0111\u0103ng nh\u1EADp.');
     }
     return redirect(res, adminLogin ? '/?admin=1' : '/');
