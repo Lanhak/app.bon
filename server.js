@@ -367,9 +367,14 @@ function findUserByLogin(login) {
 }
 
 function keyInfo(key) {
+  const owner = key.user_id ? findUserById(key.user_id) : null;
+  const title = (owner && (owner.username || owner.email)) || SETTINGS.admin_email || 'BON SHOP';
   return {
     status: 'success',
     msg: 'X\u00E1c th\u1EF1c Server th\u00E0nh c\u00F4ng: Key VIP h\u1EE3p l\u1EC7!',
+    title: title,
+    user_name: title,
+    username: title,
     key: key.key_value,
     api_key: key.key_value,
     create_date: key.created_at,
@@ -492,9 +497,14 @@ function jobPublic(job) {
   return {
     id: job.id,
     job_id: job.job_id || job.id,
+    task_id: job.task_id || job.job_id || job.id,
     link: job.link || '',
+    video_url: job.link || job.video_url || '',
     object_id: job.object_id || '',
+    ads_id: job.ads_id || '',
+    account_id: job.account_id || '',
     type: job.type || '',
+    object_type: job.object_type || (job.type === 'follow' ? 'follow' : ''),
     reaction: job.reaction || '',
     fix_coin: job.fix_coin || 0,
     price_per_after_cost: job.price_per_after_cost || job.fix_coin || 0,
@@ -545,6 +555,11 @@ async function handle(req, res) {
     const bind = applyDeviceBinding(v.key, deviceId);
     if (!bind.ok) return json(res, keyError(bind.msg));
     return json(res, keyInfo(v.key));
+  }
+
+  // APK HTool gọi trực tiếp endpoint PHP này bằng JSON { action: addHistory }.
+  if (pathname === '/checkkey/api/add_history.php') {
+    return handleCheckkeyPost(req, res, q);
   }
 
   if (pathname === '/checkkey/api/announcement.json' || pathname === '/checkkey/api/announcement') {
@@ -671,13 +686,14 @@ function handleGolike(req, res, q, platform) {
   if (action === 'complete_job') {
     if (platform === 'tiktok') {
       const adsId = q.get('ads_id') || '';
-      const ttJob = findTikJobByAds(adsId);
+      const requestedJobId = q.get('job_id') || q.get('task_id') || '';
+      const ttJob = findTikJobByAds(adsId) || findJob('tiktok', requestedJobId);
       if (ttJob) {
         ttJob.uses = (ttJob.uses || ttJob.used_count || 0) + 1;
         ttJob.used_count = ttJob.uses;
-        recordCompletion('tiktok', adsId, deviceHash, v.key.user_id || null, ttJob.price || ttJob.fix_coin || 0);
+        recordCompletion('tiktok', adsId || ttJob.job_id || ttJob.id, deviceHash, v.key.user_id || null, ttJob.price || ttJob.fix_coin || 0);
       } else {
-        recordCompletion('tiktok', adsId || q.get('job_id') || '0', deviceHash, v.key.user_id || null, 0);
+        recordCompletion('tiktok', adsId || requestedJobId || '0', deviceHash, v.key.user_id || null, 0);
       }
       save();
       return json(res, { success: true, status: 'success', message: 'Ho\u00E0n th\u00E0nh Job th\u00E0nh c\u00F4ng!', code: 'OK' });
