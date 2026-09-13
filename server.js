@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { Pool } = require('pg');
 
 
 
@@ -9,11 +10,15 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '35c9ef14-46d1-416e-aa7c-a6df43fcc013';
 const BASE_URL = process.env.BASE_URL || 'https://bonshop.onrender.com';
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
+const SESSION_SECRET = String(process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex')).trim();
+const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || 'akklanh84@gmail.com').trim().toLowerCase();
+const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || 'ttht2007');
+const PGSSL = !/^(0|false|no|off)$/i.test(String(process.env.PGSSL || 'true').trim());
 
 const SETTINGS = {
   api_secret: '5jaOqjXofEizsYZ8GkHbD5iZmiaNA6RKXuxGuQArRdM',
-  admin_email: 'akklanh84@gmail.com',
-  admin_password: 'ttht2007',
+  admin_email: ADMIN_EMAIL,
+  admin_password: ADMIN_PASSWORD,
   prices: { 24: 2000, 720: 50000, 2160: 120000 },
   banks: {
     'Sacombank': { account: '050088931308', name: 'DIEU LANH' },
@@ -152,31 +157,40 @@ function loadState() {
   return freshState();
 }
 
-// ---- Lưu dữ liệu lâu dài bằng PostgreSQL (Neon SQL over HTTP, không cần cài thêm dependency) ----
-// Set env DATABASE_URL = connection string Neon (postgresql://...) để dữ liệu không mất khi Render restart.
-// Nếu không có DATABASE_URL, server tự động dùng file data.json (ổ đĩa tạm — dữ liệu sẽ mất khi restart).
-const DATABASE_URL = process.env.DATABASE_URL || '';
-const DB_HOST = DATABASE_URL ? new URL(DATABASE_URL).origin : '';
+// ---- Lưu dữ liệu lâu dài bằng PostgreSQL (Render/Neon đều dùng được) ----
+// DATABASE_URL là connection string PostgreSQL. Không gọi /sql vì Render
+// PostgreSQL là TCP database, phải dùng driver pg.
+const DATABASE_URL_RAW = String(process.env.DATABASE_URL || '').trim();
+const DATABASE_URL = /^(null|undefined|)$/i.test(DATABASE_URL_RAW) ? '' : DATABASE_URL_RAW;
+const DB_HOST = DATABASE_URL;
+let dbPool = null;
+if (DATABASE_URL) {
+  try {
+    dbPool = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: PGSSL ? { rejectUnauthorized: false } : false,
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000
+    });
+    dbPool.on('error', (e) => {
+      console.error('PostgreSQL pool error:', e.message);
+      dbReady = false;
+      startDatabaseRetry();
+    });
+  } catch (e) {
+    console.error('DATABASE_URL không hợp lệ:', e.message);
+    dbPool = null;
+  }
+}
 let dbReady = false;
 let dbRetryTimer = null;
 let dbQueue = Promise.resolve();
 let dbInitPromise = null;
 
 async function dbQuery(query, params) {
-  const res = await fetch(DB_HOST + '/sql', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Neon-Connection-String': DATABASE_URL
-    },
-    body: JSON.stringify({ query: query, params: params || [] })
-  });
-  const data = await res.json();
-  if (!res.ok || data.error) {
-    const detail = (data.error && (data.error.message || JSON.stringify(data.error))) || JSON.stringify(data);
-    throw new Error('Postgres: ' + detail);
-  }
-  return data;
+  if (!dbPool) throw new Error('DATABASE_URL chưa được cấu hình');
+  return dbPool.query(query, params || []);
 }
 
 async function dbEnsureTable() {
@@ -563,6 +577,11 @@ async function handle(req, res) {
   }
 
   if (pathname === '/checkkey/api/announcement.json' || pathname === '/checkkey/api/announcement') {
+    return json(res, state.announcement);
+  }
+
+  // Các alias được APK HTool v13 gọi khi tải thông báo/cấu hình cập nhật.
+  if (pathname === '/checkkey/api/notifications_app.json' || pathname === '/checkkey/api/notifile_update.json') {
     return json(res, state.announcement);
   }
 
@@ -1406,14 +1425,24 @@ setInterval(() => {
   }
 }, 3600 * 1000);
 
+// Checkpoint định kỳ để không phụ thuộc vào việc có request mới hay không.
+// Nếu DB tạm mất kết nối, localDirty vẫn được giữ để retry không ghi đè dữ liệu.
+const checkpointTimer = setInterval(() => {
+  if (localDirty) saveNow();
+}, 30000);
+
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-function shutdown() {
+async function shutdown() {
+  clearInterval(checkpointTimer);
   flushFile();
-  if (DB_HOST && dbReady) {
-    dbSave().finally(() => process.exit(0));
-  } else {
+  try {
+    if (DB_HOST && dbReady) {
+      dbQueue = dbQueue.then(() => dbSave());
+      await dbQueue;
+    }
+  } finally {
     process.exit(0);
   }
 }
