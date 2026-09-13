@@ -2,15 +2,10 @@
   "name": "bon-shop-onrender-server",
   "version": "1.0.0",
   "private": true,
-  "description": "BON SHOP backend server for onrender.com - implements the full API contract that BON_TOOL app expects (shophuongdev compatible)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "engines": {
-    "node": ">=18"
-  },
-
   "dependencies": {
     "pg": "^8.16.3"
   }
